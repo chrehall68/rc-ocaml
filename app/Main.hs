@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Lexer
 import MyParser
 
 f :: Int -> Int -> Int
@@ -11,7 +12,7 @@ main = do
   x <- readLn :: IO Int
   y <- readLn :: IO Int
   print (f x y)
-  tokens <- getContents >>= return . lexer  
+  tokens <- getContents >>= return . alexScanTokens
   print tokens
   ast <- return $ calc tokens
   print ast
