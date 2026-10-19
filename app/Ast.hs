@@ -4,4 +4,5 @@ import Tokens
 
 data AstNode
   = AstInt IntLiteral
+  | AstFloat Float
   deriving (Show)
