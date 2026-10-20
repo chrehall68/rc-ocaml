@@ -8,13 +8,13 @@ data IntRepresentation
   | Int32
   | Int64
   | NativeInt
-  deriving (Show)
+  deriving (Show, Eq)
 
 data IntLiteral = IntLiteral
   { value :: Int,
     representation :: IntRepresentation
   }
-  deriving (Show)
+  deriving (Show, Eq)
 
 data Token
   = TokenCapitalizedIdentifier String
@@ -23,12 +23,107 @@ data Token
   | TokenDouble Double
   | TokenChar Char
   | TokenString String
-  | TokenMinus
-  | TokenPlus
+  | -- see https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
+    TokenDollar
+  | TokenAmpersand
   | TokenStar
+  | TokenPlus
+  | TokenMinus
   | TokenSlash
+  | TokenEq
+  | TokenGt
+  | TokenAt
+  | TokenCaret
+  | TokenPipe
+  | TokenPercent
+  | TokenLt
+  | TokenTilde
+  | TokenExclamation
+  | TokenQuestion
+  | TokenColon
+  | TokenDot
+  | TokenHash
+  | -- keywords
+    TokenAnd
+  | TokenAs
+  | TokenAssert
+  | TokenAsr
+  | TokenBegin
+  | TokenConstraint
+  | TokenDo
+  | TokenDone
+  | TokenDownto
+  | TokenElse
+  | TokenException
+  | TokenExternal
+  | TokenFalse
+  | TokenFor
+  | TokenFun
+  | TokenFunctor
+  | TokenIf
+  | TokenIn
+  | TokenInclude
+  | TokenInherit
+  | TokenLand
+  | TokenLazy
+  | TokenLet
+  | TokenLor
+  | TokenLsl
+  | TokenLxor
+  | TokenMatch
+  | TokenMethod
+  | TokenMod
+  | TokenModule
+  | TokenNew
+  | TokenNonrec
+  | TokenObject
+  | TokenOf
+  | TokenOpen
+  | TokenPrivate
+  | TokenRec
+  | TokenSig
+  | TokenStruct
+  | TokenThen
+  | TokenTrue
+  | TokenTry
+  | TokenType
+  | TokenVal
+  | TokenVirtual
+  | TokenWhile
+  | TokenWith
+  | -- multi-character symbols and punctuation
+    TokenPhysicalNE
+  | TokenAmpersandAmpersand
+  | TokenQuote
+  | TokenLParen
+  | TokenRParen
+  | TokenComma
+  | TokenMinusDot
+  | TokenArrow
+  | TokenDotDot
+  | TokenDotTilde
+  | TokenColonColon
+  | TokenColonEq
+  | TokenColonGt
+  | TokenSemi
+  | TokenSemiSemi
+  | TokenLeftArrow
+  | TokenGtRBracket
+  | TokenGtRBrace
+  | TokenLBracket
+  | TokenLBracketLt
+  | TokenLBracketGt
+  | TokenLBracketPipe
+  | TokenRBracket
+  | TokenUnderscore
+  | TokenBacktick
+  | TokenLBrace
+  | TokenLBraceLt
+  | TokenPipeRBracket
+  | TokenPipePipe
+  | TokenRBrace
   | TokenEOF
-  deriving (Show)
+  deriving (Show, Eq)
 
 removeUnderscore :: String -> String
 removeUnderscore s = filter (/= '_') s
@@ -65,7 +160,14 @@ decodeOcamlDouble raw =
   let s = removeUnderscore raw
    in case s of
         '0' : 'x' : rest -> decodeHexFloat rest
-        _ -> read s
+        _ -> read (padTrailingDot s)
+
+-- `read` requires that the . is followed by at least one digit
+padTrailingDot :: String -> String
+padTrailingDot ('.' : c : cs) | not (isDigit c) = '.' : '0' : c : padTrailingDot cs
+padTrailingDot ['.'] = ".0"
+padTrailingDot (c : cs) = c : padTrailingDot cs
+padTrailingDot [] = []
 
 -- s should not have the leading or trailing '
 decodeChar :: String -> Char
