@@ -22,6 +22,11 @@ data Token
   | TokenInt IntLiteral
   | TokenDouble Double
   | TokenChar Char
+  | TokenMinus
+  | TokenPlus
+  | TokenStar
+  | TokenSlash
+  | TokenEOF
   deriving (Show)
 
 removeUnderscore :: String -> String

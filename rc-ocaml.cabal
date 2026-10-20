@@ -42,6 +42,28 @@ extra-doc-files: CHANGELOG.md
 common warnings
   ghc-options: -Wall
 
+library rc-ocaml-lexer
+  -- Import common warning flags.
+  import: warnings
+  -- LANGUAGE extensions used by modules in this package.
+  -- other-extensions:
+  -- Other library packages from which modules are imported.
+  build-depends:
+    array,
+    base ^>=4.20.2.0,
+
+  exposed-modules:
+    Lexer
+    Tokens
+
+  build-tool-depends:
+    alex:alex
+
+  -- Directories containing source files.
+  hs-source-dirs: lexer
+  -- Base language which the package is written in.
+  default-language: Haskell2010
+
 executable rc-ocaml
   -- Import common warning flags.
   import: warnings
@@ -50,9 +72,7 @@ executable rc-ocaml
   -- Modules included in this executable, other than Main.
   other-modules:
     Ast
-    Lexer
     MyParser
-    Tokens
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -60,10 +80,10 @@ executable rc-ocaml
   build-depends:
     array,
     base ^>=4.20.2.0,
+    rc-ocaml-lexer,
 
   build-tool-depends:
-    alex:alex,
-    happy:happy,
+    happy:happy
 
   -- Directories containing source files.
   hs-source-dirs: app
