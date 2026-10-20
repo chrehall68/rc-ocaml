@@ -22,6 +22,7 @@ data Token
   | TokenInt IntLiteral
   | TokenDouble Double
   | TokenChar Char
+  | TokenString String
   | TokenMinus
   | TokenPlus
   | TokenStar
