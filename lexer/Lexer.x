@@ -57,75 +57,112 @@ tokens :-
     @floatBase10                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
     @floatBase16                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
     -- characters
-    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar s) ) }
+    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar (tail (init s)))) }
     -- strings
-    \{ [$lower \_]* \|                  { enterQuotedString }
+    \"                                  { enterQuotedString }
+    \{ [$lower \_]* \|                  { enterDelimitedString }
     -- operators
     \-                                  { regularToken (const TokenMinus) }
     \+                                  { regularToken (const TokenPlus) }
     \*                                  { regularToken (const TokenStar) }
     \/                                  { regularToken (const TokenSlash) }
   }
-  -- the rest of the machinery for recognizing quoted strings
-  <quoted> {
-    \| [$lower \_]* \}  /{ isEndOfQuotedString }   { exitQuotedString }
-    [$white .]                                     { nextQuotedStringChar }
+  -- the rest of the machinery for recognizing strings
+  <delimited> {
+    \| [$lower \_]* \}  /{ isEndOfDelimitedString }   { exitDelimitedString }
+    [$white .]                                        { nextDelimitedStringChar }
   }
-
+  <quoted> {
+    \"                                                          { exitQuotedString }
+    (@escape | $white | [^ \\])                                 { nextQuotedStringChar }
+    \\ $white+                                                  ;  -- ignore whitespace following backslash
+  }
 
 {
 -- our actual monad
-data QuotedStringState = QuotedStringState {
-    currentStringReversed :: String,
+data DelimitedStringState = DelimitedStringState {
+    delimitedReversed :: String,
     delimiter :: String
 }
+data QuotedStringState = QuotedStringState {
+    quotedReversed :: String
+}
 data AlexUserState = AlexUserState {
+    delimitedString :: Maybe DelimitedStringState,
     quotedString :: Maybe QuotedStringState
 }
-  
 
 alexInitUserState :: AlexUserState
-alexInitUserState = AlexUserState Nothing
+alexInitUserState = AlexUserState Nothing Nothing
 
-enterQuotedString :: AlexAction Token
-enterQuotedString (_,_,_,s) len = do
+-- delimited strings
+enterDelimitedString :: AlexAction Token
+enterDelimitedString (_,_,_,s) len = do
+  userState <- alexGetUserState;
   let delim = tail (take (len-1) s)
-      state = Just (QuotedStringState { currentStringReversed = "", delimiter = delim }) in
-        alexSetUserState (AlexUserState { quotedString = state });
-  alexSetStartCode quoted;
+      state = Just (DelimitedStringState { delimitedReversed = "", delimiter = delim }) in
+        alexSetUserState (userState { delimitedString = state });
+  alexSetStartCode delimited;
   scanToken
 
-isEndOfQuotedString :: AlexUserState -> AlexInput -> Int -> AlexInput -> Bool
-isEndOfQuotedString userState (_,_,_,s) len _ = do
-  let stringState = fromJust (quotedString userState) in
+isEndOfDelimitedString :: AlexUserState -> AlexInput -> Int -> AlexInput -> Bool
+isEndOfDelimitedString userState (_,_,_,s) len _ = do
+  let stringState = fromJust (delimitedString userState) in
     (tail (take (len-1) s)) == (delimiter stringState)
 
 -- since we take one character at a time, we can just concatenate
+nextDelimitedStringChar :: AlexAction Token
+nextDelimitedStringChar (_,_,_,s) _ = do
+  userState <- alexGetUserState;
+  let stringState = fromJust (delimitedString userState) in
+    alexSetUserState (userState {
+      delimitedString = Just (stringState { delimitedReversed = (head s) : (delimitedReversed stringState) })
+    });
+  scanToken
+
+exitDelimitedString :: AlexAction Token
+exitDelimitedString _ _ = do
+    userState <- alexGetUserState;
+    alexSetUserState (userState { delimitedString = Nothing });
+    alexSetStartCode 0;
+    let stringState = fromJust (delimitedString userState) in
+      return (TokenString (reverse (delimitedReversed stringState)))
+
+-- quoted strings
+enterQuotedString :: AlexAction Token
+enterQuotedString (_,_,_,s) len = do
+  userState <- alexGetUserState;
+  let state = Just (QuotedStringState { quotedReversed = "" }) in
+    alexSetUserState (userState { quotedString = state });
+  alexSetStartCode quoted;
+  scanToken
+
 nextQuotedStringChar :: AlexAction Token
-nextQuotedStringChar (_,_,_,s) _ = do
+nextQuotedStringChar (_,_,_,s) len = do
   userState <- alexGetUserState;
   let stringState = fromJust (quotedString userState) in
-    alexSetUserState (AlexUserState {
-      quotedString = Just (stringState { currentStringReversed = (head s) : (currentStringReversed stringState) })
+    alexSetUserState (userState {
+      quotedString = Just (stringState { quotedReversed = (decodeChar (take len s)) : (quotedReversed stringState) })
     });
   scanToken
 
 exitQuotedString :: AlexAction Token
 exitQuotedString _ _ = do
     userState <- alexGetUserState;
-    alexSetUserState (AlexUserState Nothing);
+    alexSetUserState (userState { quotedString = Nothing });
     alexSetStartCode 0;
     let stringState = fromJust (quotedString userState) in
-      return (TokenString (reverse (currentStringReversed stringState)))
+      return (TokenString (reverse (quotedReversed stringState)))
 
 regularToken :: (String -> Token) -> AlexAction Token
 regularToken f =  \(_,_,_,s) len -> return (f (take len s))
 
 alexEOF = do 
   userState <- alexGetUserState;
-  case quotedString userState of
-    Just _ -> alexError "unterminated string"
-    Nothing -> return TokenEOF
+  case (delimitedString userState, quotedString userState) of
+    (Just _, _) -> alexError "unterminated string"
+    (_, Just _) -> alexError "unterminated string"
+    (Nothing, Nothing) -> return TokenEOF
 
 
 -- similar to alexMonadScan, but calls alexScanUser instead of just alexScan

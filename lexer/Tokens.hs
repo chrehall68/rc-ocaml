@@ -67,12 +67,11 @@ decodeOcamlDouble raw =
         '0' : 'x' : rest -> decodeHexFloat rest
         _ -> read s
 
+-- s should not have the leading or trailing '
 decodeChar :: String -> Char
 decodeChar s =
-  -- strip leading/trailing '
-  let s' = tail (init s)
-      first = head s'
-      rest = tail s'
+  let first = head s
+      rest = tail s
    in case first of
         '\\' -> case rest of
           -- simple escapes
