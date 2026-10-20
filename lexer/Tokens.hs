@@ -23,10 +23,105 @@ data Token
   | TokenDouble Double
   | TokenChar Char
   | TokenString String
-  | TokenMinus
-  | TokenPlus
+  | -- see https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
+    TokenDollar
+  | TokenAmpersand
   | TokenStar
+  | TokenPlus
+  | TokenMinus
   | TokenSlash
+  | TokenEq
+  | TokenGt
+  | TokenAt
+  | TokenCaret
+  | TokenPipe
+  | TokenPercent
+  | TokenLt
+  | TokenTilde
+  | TokenExclamation
+  | TokenQuestion
+  | TokenColon
+  | TokenDot
+  | TokenHash
+  | -- keywords
+    TokenAnd
+  | TokenAs
+  | TokenAssert
+  | TokenAsr
+  | TokenBegin
+  | TokenConstraint
+  | TokenDo
+  | TokenDone
+  | TokenDownto
+  | TokenElse
+  | TokenException
+  | TokenExternal
+  | TokenFalse
+  | TokenFor
+  | TokenFun
+  | TokenFunctor
+  | TokenIf
+  | TokenIn
+  | TokenInclude
+  | TokenInherit
+  | TokenLand
+  | TokenLazy
+  | TokenLet
+  | TokenLor
+  | TokenLsl
+  | TokenLxor
+  | TokenMatch
+  | TokenMethod
+  | TokenMod
+  | TokenModule
+  | TokenNew
+  | TokenNonrec
+  | TokenObject
+  | TokenOf
+  | TokenOpen
+  | TokenPrivate
+  | TokenRec
+  | TokenSig
+  | TokenStruct
+  | TokenThen
+  | TokenTrue
+  | TokenTry
+  | TokenType
+  | TokenVal
+  | TokenVirtual
+  | TokenWhile
+  | TokenWith
+  | -- multi-character symbols and punctuation
+    TokenPhysicalNE
+  | TokenAmpersandAmpersand
+  | TokenQuote
+  | TokenLParen
+  | TokenRParen
+  | TokenComma
+  | TokenMinusDot
+  | TokenArrow
+  | TokenDotDot
+  | TokenDotTilde
+  | TokenColonColon
+  | TokenColonEq
+  | TokenColonGt
+  | TokenSemi
+  | TokenSemiSemi
+  | TokenLeftArrow
+  | TokenGtRBracket
+  | TokenGtRBrace
+  | TokenLBracket
+  | TokenLBracketLt
+  | TokenLBracketGt
+  | TokenLBracketPipe
+  | TokenRBracket
+  | TokenUnderscore
+  | TokenBacktick
+  | TokenLBrace
+  | TokenLBraceLt
+  | TokenPipeRBracket
+  | TokenPipePipe
+  | TokenRBrace
   | TokenEOF
   deriving (Show)
 
