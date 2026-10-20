@@ -93,15 +93,15 @@ tokens :-
     virtual                             { regularToken (const TokenVirtual) }
     while                               { regularToken (const TokenWhile) }
     with                                { regularToken (const TokenWith) }
-    -- wildcard (must precede identifiers so it wins the tie)
+    -- wildcard, supposed to be treated differently than an identifier
     \_                                  { regularToken (const TokenUnderscore) }
     -- identifiers
     $upper $identifierSuffix*           { regularToken (\s -> TokenCapitalizedIdentifier s) }
     [$lower \_] $identifierSuffix*      { regularToken (\s -> TokenLowercaseIdentifier s) }
     -- integers
-    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Int32}) ) }
-    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Int64}) ) }
-    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=NativeInt}) ) }
+    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int32}) ) }
+    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int64}) ) }
+    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=NativeInt}) ) }
     @integerLiteral                     { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Unspecified}) ) }
     -- floats
     @floatBase10                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}

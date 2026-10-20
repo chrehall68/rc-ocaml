@@ -8,13 +8,13 @@ data IntRepresentation
   | Int32
   | Int64
   | NativeInt
-  deriving (Show)
+  deriving (Show, Eq)
 
 data IntLiteral = IntLiteral
   { value :: Int,
     representation :: IntRepresentation
   }
-  deriving (Show)
+  deriving (Show, Eq)
 
 data Token
   = TokenCapitalizedIdentifier String
@@ -123,7 +123,7 @@ data Token
   | TokenPipePipe
   | TokenRBrace
   | TokenEOF
-  deriving (Show)
+  deriving (Show, Eq)
 
 removeUnderscore :: String -> String
 removeUnderscore s = filter (/= '_') s
@@ -160,7 +160,14 @@ decodeOcamlDouble raw =
   let s = removeUnderscore raw
    in case s of
         '0' : 'x' : rest -> decodeHexFloat rest
-        _ -> read s
+        _ -> read (padTrailingDot s)
+
+-- `read` requires that the . is followed by at least one digit
+padTrailingDot :: String -> String
+padTrailingDot ('.' : c : cs) | not (isDigit c) = '.' : '0' : c : padTrailingDot cs
+padTrailingDot ['.'] = ".0"
+padTrailingDot (c : cs) = c : padTrailingDot cs
+padTrailingDot [] = []
 
 -- s should not have the leading or trailing '
 decodeChar :: String -> Char
