@@ -25,7 +25,7 @@ $letter = [$lower $upper]
 $identifierSuffix = [$letter $digit \_ \']
 $ident = [$letter \_]
 @lowercaseIdent = [$lower \_] $identifierSuffix*
-@capitalizedIdent = [$upper \_] $identifierSuffix*
+@capitalizedIdent = $upper $identifierSuffix*
 
 -- integers
 @base10Literal = $digit [ $digit \_ ]*
