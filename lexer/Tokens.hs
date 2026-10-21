@@ -23,26 +23,8 @@ data Token
   | TokenDouble Double
   | TokenChar Char
   | TokenString String
-  | -- see https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
-    TokenDollar
-  | TokenAmpersand
-  | TokenStar
-  | TokenPlus
-  | TokenMinus
-  | TokenSlash
-  | TokenEq
-  | TokenGt
-  | TokenAt
-  | TokenCaret
-  | TokenPipe
-  | TokenPercent
-  | TokenLt
-  | TokenTilde
-  | TokenExclamation
-  | TokenQuestion
-  | TokenColon
-  | TokenDot
-  | TokenHash
+  | TokenInfix String
+  | TokenPrefix String
   | -- keywords
     TokenAnd
   | TokenAs
@@ -93,23 +75,34 @@ data Token
   | TokenWith
   | -- multi-character symbols and punctuation
     TokenPhysicalNE
+  | TokenHash
+  | TokenAmpersand
   | TokenAmpersandAmpersand
   | TokenQuote
   | TokenLParen
   | TokenRParen
+  | TokenStar
+  | TokenPlus
   | TokenComma
+  | TokenMinus
   | TokenMinusDot
   | TokenArrow
+  | TokenDot
   | TokenDotDot
   | TokenDotTilde
+  | TokenColon
   | TokenColonColon
   | TokenColonEq
   | TokenColonGt
   | TokenSemi
   | TokenSemiSemi
+  | TokenLt
   | TokenLeftArrow
+  | TokenEq
+  | TokenGt
   | TokenGtRBracket
   | TokenGtRBrace
+  | TokenQuestion
   | TokenLBracket
   | TokenLBracketLt
   | TokenLBracketGt
@@ -119,9 +112,11 @@ data Token
   | TokenBacktick
   | TokenLBrace
   | TokenLBraceLt
+  | TokenPipe
   | TokenPipeRBracket
   | TokenPipePipe
   | TokenRBrace
+  | TokenTilde
   | TokenEOF
   deriving (Show, Eq)
 

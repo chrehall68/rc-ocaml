@@ -40,7 +40,12 @@ $ident = [$letter \_]
 $simpleEscape = [\\ \" \' n t b r]
 @escape = \\ ( $simpleEscape | " " | $digit{3} | o $octalDigit{3} | x $hexDigit{2} )
 @regularChar = [^ \\ \' \n \r]
-
+-- prefix and infix symbols
+-- supposed to be lexed as a single token according to https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
+$coreOperatorChar = [\$ & \* \+ \- \/ = \> @ \^ \| ]
+$operatorChar = [$coreOperatorChar \~ \! \? \% \< \: \. ]
+@infixSymbol = ([$coreOperatorChar \% \<] [$operatorChar]*) | (\# [$operatorChar]+)
+@prefixSymbol = (\! $operatorChar*) | ([\? \~] [$operatorChar]+)
 
 tokens :-
   <0> {
@@ -93,8 +98,53 @@ tokens :-
     virtual                             { regularToken (const TokenVirtual) }
     while                               { regularToken (const TokenWhile) }
     with                                { regularToken (const TokenWith) }
-    -- wildcard, supposed to be treated differently than an identifier
+    -- keyword symbols
+    \!=                                 { regularToken (const TokenPhysicalNE) }
+    \#                                  { regularToken (const TokenHash) }
+    &                                   { regularToken (const TokenAmpersand) }
+    &&                                  { regularToken (const TokenAmpersandAmpersand) }
+    \'                                  { regularToken (const TokenQuote) }
+    \(                                  { regularToken (const TokenLParen) }
+    \)                                  { regularToken (const TokenRParen) }
+    \*                                  { regularToken (const TokenStar) }
+    \+                                  { regularToken (const TokenPlus) }
+    \,                                  { regularToken (const TokenComma) }
+    \-                                  { regularToken (const TokenMinus) }
+    \-\.                                { regularToken (const TokenMinusDot) }
+    \-\>                                { regularToken (const TokenArrow) }
+    \.                                  { regularToken (const TokenDot) }
+    \.\.                                { regularToken (const TokenDotDot) }
+    \.\~                                { regularToken (const TokenDotTilde) }
+    \:                                  { regularToken (const TokenColon) }
+    \:\:                                { regularToken (const TokenColonColon) }
+    \:=                                 { regularToken (const TokenColonEq) }
+    \:\>                                { regularToken (const TokenColonGt) }
+    \;                                  { regularToken (const TokenSemi) }
+    \;\;                                { regularToken (const TokenSemiSemi) }
+    \<                                  { regularToken (const TokenLt) }
+    \<\-                                { regularToken (const TokenLeftArrow) }
+    =                                   { regularToken (const TokenEq) }
+    \>                                  { regularToken (const TokenGt) }
+    \>\]                                { regularToken (const TokenGtRBracket) }
+    \>\}                                { regularToken (const TokenGtRBrace) }
+    \?                                  { regularToken (const TokenQuestion) }
+    \[                                  { regularToken (const TokenLBracket) }
+    \[\<                                { regularToken (const TokenLBracketLt) }
+    \[\>                                { regularToken (const TokenLBracketGt) }
+    \[\|                                { regularToken (const TokenLBracketPipe) }
+    \]                                  { regularToken (const TokenRBracket) }
     \_                                  { regularToken (const TokenUnderscore) }
+    \`                                  { regularToken (const TokenBacktick) }
+    \{                                  { regularToken (const TokenLBrace) }
+    \{\<                                { regularToken (const TokenLBraceLt) }
+    \|                                  { regularToken (const TokenPipe) }
+    \|\]                                { regularToken (const TokenPipeRBracket) }
+    \|\|                                { regularToken (const TokenPipePipe) }
+    \}                                  { regularToken (const TokenRBrace) }
+    \~                                  { regularToken (const TokenTilde) }
+    -- prefix/infix operators
+    @infixSymbol                        { regularToken (\s -> TokenInfix s) }
+    @prefixSymbol                       { regularToken (\s -> TokenPrefix s) }
     -- identifiers
     $upper $identifierSuffix*           { regularToken (\s -> TokenCapitalizedIdentifier s) }
     [$lower \_] $identifierSuffix*      { regularToken (\s -> TokenLowercaseIdentifier s) }
@@ -111,55 +161,6 @@ tokens :-
     -- strings
     \"                                  { enterQuotedString }
     \{ [$lower \_]* \|                  { enterDelimitedString }
-    -- operators and symbols
-    \$                                  { regularToken (const TokenDollar) }
-    &                                   { regularToken (const TokenAmpersand) }
-    \*                                  { regularToken (const TokenStar) }
-    \+                                  { regularToken (const TokenPlus) }
-    \-                                  { regularToken (const TokenMinus) }
-    \/                                  { regularToken (const TokenSlash) }
-    =                                   { regularToken (const TokenEq) }
-    \>                                  { regularToken (const TokenGt) }
-    @                                   { regularToken (const TokenAt) }
-    \^                                  { regularToken (const TokenCaret) }
-    \|                                  { regularToken (const TokenPipe) }
-    \%                                  { regularToken (const TokenPercent) }
-    \<                                  { regularToken (const TokenLt) }
-    \~                                  { regularToken (const TokenTilde) }
-    \!                                  { regularToken (const TokenExclamation) }
-    \?                                  { regularToken (const TokenQuestion) }
-    \:                                  { regularToken (const TokenColon) }
-    \.                                  { regularToken (const TokenDot) }
-    \#                                  { regularToken (const TokenHash) }
-    \!=                                 { regularToken (const TokenPhysicalNE) }
-    &&                                  { regularToken (const TokenAmpersandAmpersand) }
-    \'                                  { regularToken (const TokenQuote) }
-    \(                                  { regularToken (const TokenLParen) }
-    \)                                  { regularToken (const TokenRParen) }
-    \,                                  { regularToken (const TokenComma) }
-    \-\.                                { regularToken (const TokenMinusDot) }
-    \-\>                                { regularToken (const TokenArrow) }
-    \.\.                                { regularToken (const TokenDotDot) }
-    \.\~                                { regularToken (const TokenDotTilde) }
-    \:\:                                { regularToken (const TokenColonColon) }
-    \:=                                 { regularToken (const TokenColonEq) }
-    \:\>                                { regularToken (const TokenColonGt) }
-    \;                                  { regularToken (const TokenSemi) }
-    \;\;                                { regularToken (const TokenSemiSemi) }
-    \<\-                                { regularToken (const TokenLeftArrow) }
-    \>\]                                { regularToken (const TokenGtRBracket) }
-    \>\}                                { regularToken (const TokenGtRBrace) }
-    \[                                  { regularToken (const TokenLBracket) }
-    \[\<                                { regularToken (const TokenLBracketLt) }
-    \[\>                                { regularToken (const TokenLBracketGt) }
-    \[\|                                { regularToken (const TokenLBracketPipe) }
-    \]                                  { regularToken (const TokenRBracket) }
-    \`                                  { regularToken (const TokenBacktick) }
-    \{                                  { regularToken (const TokenLBrace) }
-    \{\<                                { regularToken (const TokenLBraceLt) }
-    \|\]                                { regularToken (const TokenPipeRBracket) }
-    \|\|                                { regularToken (const TokenPipePipe) }
-    \}                                  { regularToken (const TokenRBrace) }
   }
   -- the rest of the machinery for recognizing strings
   <delimited> {
