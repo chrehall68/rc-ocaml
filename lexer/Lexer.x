@@ -145,6 +145,7 @@ tokens :-
     \|\|                                { regularToken (const TokenPipePipe) }
     \}                                  { regularToken (const TokenRBrace) }
     \~                                  { regularToken (const TokenTilde) }
+    \(\*                                { enterComment }
     -- identifiers
     @capitalizedIdent                   { regularToken (\s -> TokenCapitalizedIdentifier s) }
     @lowercaseIdent                     { regularToken (\s -> TokenLowercaseIdentifier s) }
@@ -180,6 +181,11 @@ tokens :-
     (@escape | $white | [^ \\])                                 { nextQuotedStringChar }
     \\ \n $white*                                               ;  -- ignore whitespace following backslash and newline
   }
+  <comment> {
+    \(\*                                { openNestedComment }
+    \*\)                                { closeNestedComment }
+    [$white .]                          ;
+  }
 
 {
 -- our actual monad
@@ -192,13 +198,18 @@ data QuotedStringState = QuotedStringState
   { quotedReversed :: String
   }
 
+data CommentState = CommentState
+  { commentDepth :: Integer
+  }
+
 data AlexUserState = AlexUserState
   { delimitedString :: Maybe DelimitedStringState
   , quotedString    :: Maybe QuotedStringState
+  , commentActive   :: Maybe CommentState
   }
 
 alexInitUserState :: AlexUserState
-alexInitUserState = AlexUserState Nothing Nothing
+alexInitUserState = AlexUserState Nothing Nothing Nothing
 
 -- delimited strings
 enterDelimitedString :: AlexAction Token
@@ -267,16 +278,54 @@ exitQuotedString _ _ = do
   alexSetStartCode 0
   return (TokenString (reverse (quotedReversed stringState)))
 
+-- comments
+enterComment :: AlexAction Token
+enterComment _ _ = do 
+  userState <- alexGetUserState
+  let state = Just (CommentState { commentDepth = 1 })
+  alexSetUserState (userState { commentActive = state })
+  alexSetStartCode comment
+  scanToken
+
+openNestedComment :: AlexAction Token
+openNestedComment _ _ = do
+  userState <- alexGetUserState
+  let commentState = fromJust (commentActive userState)
+  alexSetUserState (userState {
+    commentActive = Just (commentState { commentDepth = 1 + (commentDepth commentState) })
+  })
+  scanToken
+
+closeNestedComment :: AlexAction Token
+closeNestedComment a b = do
+  userState <- alexGetUserState
+  let commentState = fromJust (commentActive userState)
+  alexSetUserState (userState {
+    commentActive = Just (commentState { commentDepth = (commentDepth commentState) - 1 })
+  })
+  case (commentDepth commentState) of 
+    1 -> exitComment a b
+    _ -> scanToken
+
+exitComment :: AlexAction Token
+exitComment _ _ = do
+  userState <- alexGetUserState
+  let commentState = fromJust (commentActive userState)
+  alexSetUserState (userState { commentActive = Nothing })
+  alexSetStartCode 0
+  return TokenComment
+
 regularToken :: (String -> Token) -> AlexAction Token
 regularToken f = \(_, _, _, s) len -> return (f (take len s))
 
 alexEOF :: Alex Token
 alexEOF = do
   userState <- alexGetUserState
-  case (delimitedString userState, quotedString userState) of
-    (Just _, _)        -> alexError $ "unterminated string literal; did not find matching |" ++ delimiter (fromJust (delimitedString userState)) ++ "}"
-    (_, Just _)        -> alexError "unterminated string literal; no matching closing quote found"
-    (Nothing, Nothing) -> return TokenEOF
+  case (delimitedString userState, quotedString userState, commentActive userState) of
+    (Just _, _, _)        -> alexError $ "unterminated string literal; did not find matching |" ++ delimiter (fromJust (delimitedString userState)) ++ "}"
+    (_, Just _, _)        -> alexError "unterminated string literal; no matching closing quote found"
+    (_, _, Just _)        -> alexError "unterminated comment; no matching closing comment found"
+    (Nothing, Nothing, Nothing) -> return TokenEOF
 
 -- similar to alexMonadScan, but calls alexScanUser instead of just alexScan
 scanToken :: Alex Token
