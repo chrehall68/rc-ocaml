@@ -1,4 +1,4 @@
-module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), decodeOcamlInt, decodeOcamlDouble, decodeChar) where
+module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
 
 import Data.Char
 import Numeric
@@ -22,27 +22,11 @@ data Token
   | TokenInt IntLiteral
   | TokenDouble Double
   | TokenChar Char
-  | TokenString String
-  | -- see https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
-    TokenDollar
-  | TokenAmpersand
-  | TokenStar
-  | TokenPlus
-  | TokenMinus
-  | TokenSlash
-  | TokenEq
-  | TokenGt
-  | TokenAt
-  | TokenCaret
-  | TokenPipe
-  | TokenPercent
-  | TokenLt
-  | TokenTilde
-  | TokenExclamation
-  | TokenQuestion
-  | TokenColon
-  | TokenDot
-  | TokenHash
+  | TokenString String -- string is the contents of the string, without quotes/delimiters
+  | TokenLabel String -- string is just the label name
+  | TokenOptionalLabel String -- string is just the label name
+  | TokenInfix String
+  | TokenPrefix String
   | -- keywords
     TokenAnd
   | TokenAs
@@ -91,25 +75,36 @@ data Token
   | TokenVirtual
   | TokenWhile
   | TokenWith
-  | -- multi-character symbols and punctuation
+  | -- keyword symbols
     TokenPhysicalNE
+  | TokenHash
+  | TokenAmpersand
   | TokenAmpersandAmpersand
   | TokenQuote
   | TokenLParen
   | TokenRParen
+  | TokenStar
+  | TokenPlus
   | TokenComma
+  | TokenMinus
   | TokenMinusDot
   | TokenArrow
+  | TokenDot
   | TokenDotDot
   | TokenDotTilde
+  | TokenColon
   | TokenColonColon
   | TokenColonEq
   | TokenColonGt
   | TokenSemi
   | TokenSemiSemi
+  | TokenLt
   | TokenLeftArrow
+  | TokenEq
+  | TokenGt
   | TokenGtRBracket
   | TokenGtRBrace
+  | TokenQuestion
   | TokenLBracket
   | TokenLBracketLt
   | TokenLBracketGt
@@ -119,9 +114,11 @@ data Token
   | TokenBacktick
   | TokenLBrace
   | TokenLBraceLt
+  | TokenPipe
   | TokenPipeRBracket
   | TokenPipePipe
   | TokenRBrace
+  | TokenTilde
   | TokenEOF
   deriving (Show, Eq)
 
@@ -192,3 +189,7 @@ decodeChar s =
           -- digit
           _ -> chr (decodeOcamlInt rest)
         _ -> first
+
+-- \u{...}
+decodeUnicodeChar :: String -> Char
+decodeUnicodeChar s = chr (decodeOcamlInt ("0x" ++ (drop 3 (init s))))

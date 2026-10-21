@@ -20,9 +20,12 @@ $lower =
 $upper =
     [A-Z À-Ö Ø-Þ Œ Š Ž Ÿ ẞ]
 
+-- identifiers
 $letter = [$lower $upper]
 $identifierSuffix = [$letter $digit \_ \']
 $ident = [$letter \_]
+@lowercaseIdent = [$lower \_] $identifierSuffix*
+@capitalizedIdent = $upper $identifierSuffix*
 
 -- integers
 @base10Literal = $digit [ $digit \_ ]*
@@ -40,7 +43,12 @@ $ident = [$letter \_]
 $simpleEscape = [\\ \" \' n t b r]
 @escape = \\ ( $simpleEscape | " " | $digit{3} | o $octalDigit{3} | x $hexDigit{2} )
 @regularChar = [^ \\ \' \n \r]
-
+-- prefix and infix symbols
+-- supposed to be lexed as a single token according to https://ocaml.org/manual/5.3/lex.html#sss:lex-ops-symbols
+$coreOperatorChar = [\$ & \* \+ \- \/ = \> @ \^ \| ]
+$operatorChar = [$coreOperatorChar \~ \! \? \% \< \: \. ]
+@infixSymbol = ([$coreOperatorChar \% \<] [$operatorChar]*) | (\# [$operatorChar]+)
+@prefixSymbol = (\! $operatorChar*) | ([\? \~] [$operatorChar]+)
 
 tokens :-
   <0> {
@@ -93,73 +101,73 @@ tokens :-
     virtual                             { regularToken (const TokenVirtual) }
     while                               { regularToken (const TokenWhile) }
     with                                { regularToken (const TokenWith) }
-    -- wildcard, supposed to be treated differently than an identifier
-    \_                                  { regularToken (const TokenUnderscore) }
-    -- identifiers
-    $upper $identifierSuffix*           { regularToken (\s -> TokenCapitalizedIdentifier s) }
-    [$lower \_] $identifierSuffix*      { regularToken (\s -> TokenLowercaseIdentifier s) }
-    -- integers
-    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int32}) ) }
-    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int64}) ) }
-    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=NativeInt}) ) }
-    @integerLiteral                     { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Unspecified}) ) }
-    -- floats
-    @floatBase10                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
-    @floatBase16                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
-    -- characters
-    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar (tail (init s)))) }
-    -- strings
-    \"                                  { enterQuotedString }
-    \{ [$lower \_]* \|                  { enterDelimitedString }
-    -- operators and symbols
-    \$                                  { regularToken (const TokenDollar) }
-    &                                   { regularToken (const TokenAmpersand) }
-    \*                                  { regularToken (const TokenStar) }
-    \+                                  { regularToken (const TokenPlus) }
-    \-                                  { regularToken (const TokenMinus) }
-    \/                                  { regularToken (const TokenSlash) }
-    =                                   { regularToken (const TokenEq) }
-    \>                                  { regularToken (const TokenGt) }
-    @                                   { regularToken (const TokenAt) }
-    \^                                  { regularToken (const TokenCaret) }
-    \|                                  { regularToken (const TokenPipe) }
-    \%                                  { regularToken (const TokenPercent) }
-    \<                                  { regularToken (const TokenLt) }
-    \~                                  { regularToken (const TokenTilde) }
-    \!                                  { regularToken (const TokenExclamation) }
-    \?                                  { regularToken (const TokenQuestion) }
-    \:                                  { regularToken (const TokenColon) }
-    \.                                  { regularToken (const TokenDot) }
-    \#                                  { regularToken (const TokenHash) }
+    -- keyword symbols
     \!=                                 { regularToken (const TokenPhysicalNE) }
+    \#                                  { regularToken (const TokenHash) }
+    &                                   { regularToken (const TokenAmpersand) }
     &&                                  { regularToken (const TokenAmpersandAmpersand) }
     \'                                  { regularToken (const TokenQuote) }
     \(                                  { regularToken (const TokenLParen) }
     \)                                  { regularToken (const TokenRParen) }
+    \*                                  { regularToken (const TokenStar) }
+    \+                                  { regularToken (const TokenPlus) }
     \,                                  { regularToken (const TokenComma) }
+    \-                                  { regularToken (const TokenMinus) }
     \-\.                                { regularToken (const TokenMinusDot) }
     \-\>                                { regularToken (const TokenArrow) }
+    \.                                  { regularToken (const TokenDot) }
     \.\.                                { regularToken (const TokenDotDot) }
     \.\~                                { regularToken (const TokenDotTilde) }
+    \:                                  { regularToken (const TokenColon) }
     \:\:                                { regularToken (const TokenColonColon) }
     \:=                                 { regularToken (const TokenColonEq) }
     \:\>                                { regularToken (const TokenColonGt) }
     \;                                  { regularToken (const TokenSemi) }
     \;\;                                { regularToken (const TokenSemiSemi) }
+    \<                                  { regularToken (const TokenLt) }
     \<\-                                { regularToken (const TokenLeftArrow) }
+    =                                   { regularToken (const TokenEq) }
+    \>                                  { regularToken (const TokenGt) }
     \>\]                                { regularToken (const TokenGtRBracket) }
     \>\}                                { regularToken (const TokenGtRBrace) }
+    \?                                  { regularToken (const TokenQuestion) }
     \[                                  { regularToken (const TokenLBracket) }
     \[\<                                { regularToken (const TokenLBracketLt) }
     \[\>                                { regularToken (const TokenLBracketGt) }
     \[\|                                { regularToken (const TokenLBracketPipe) }
     \]                                  { regularToken (const TokenRBracket) }
+    \_                                  { regularToken (const TokenUnderscore) }
     \`                                  { regularToken (const TokenBacktick) }
     \{                                  { regularToken (const TokenLBrace) }
     \{\<                                { regularToken (const TokenLBraceLt) }
+    \|                                  { regularToken (const TokenPipe) }
     \|\]                                { regularToken (const TokenPipeRBracket) }
     \|\|                                { regularToken (const TokenPipePipe) }
     \}                                  { regularToken (const TokenRBrace) }
+    \~                                  { regularToken (const TokenTilde) }
+    -- identifiers
+    @capitalizedIdent                   { regularToken (\s -> TokenCapitalizedIdentifier s) }
+    @lowercaseIdent                     { regularToken (\s -> TokenLowercaseIdentifier s) }
+    -- integers
+    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=Int32}) ) }
+    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=Int64}) ) }
+    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=NativeInt}) ) }
+    @integerLiteral                     { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Unspecified}) ) }
+    -- floats
+    @floatBase10                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
+    @floatBase16                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
+    -- characters
+    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar (tail . init $ s))) }
+    -- strings
+    \"                                  { enterQuotedString }
+    \{ [$lower \_]* \|                  { enterDelimitedString }
+    -- naming labels
+    -- see https://ocaml.org/manual/5.3/lex.html#sss:labelname
+    \~ @lowercaseIdent \:               { regularToken (\s -> TokenLabel (tail . init $ s)) }
+    \? @lowercaseIdent \:               { regularToken (\s -> TokenOptionalLabel (tail . init $ s)) }
+    -- prefix/infix operators
+    @infixSymbol                        { regularToken (\s -> TokenInfix s) }
+    @prefixSymbol                       { regularToken (\s -> TokenPrefix s) }
   }
   -- the rest of the machinery for recognizing strings
   <delimited> {
@@ -168,7 +176,7 @@ tokens :-
   }
   <quoted> {
     \"                                                          { exitQuotedString }
-    -- TODO - handle unicode characters?
+    \\ u \{ [$hexDigit]+ \}                                     { nextQuotedStringUnicodeChar }
     (@escape | $white | [^ \\])                                 { nextQuotedStringChar }
     \\ \n $white*                                               ;  -- ignore whitespace following backslash and newline
   }
@@ -239,6 +247,15 @@ nextQuotedStringChar (_, _, _, s) len = do
   let stringState = fromJust (quotedString userState)
   alexSetUserState (userState {
     quotedString = Just (stringState { quotedReversed = decodeChar (take len s) : quotedReversed stringState })
+  })
+  scanToken
+
+nextQuotedStringUnicodeChar :: AlexAction Token
+nextQuotedStringUnicodeChar (_, _, _, s) len = do
+  userState <- alexGetUserState
+  let stringState = fromJust (quotedString userState)
+  alexSetUserState (userState {
+    quotedString = Just (stringState { quotedReversed = decodeUnicodeChar (take len s) : quotedReversed stringState })
   })
   scanToken
 
