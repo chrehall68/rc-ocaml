@@ -1,4 +1,4 @@
-module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), decodeOcamlInt, decodeOcamlDouble, decodeChar) where
+module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
 
 import Data.Char
 import Numeric
@@ -189,3 +189,7 @@ decodeChar s =
           -- digit
           _ -> chr (decodeOcamlInt rest)
         _ -> first
+
+-- \u{...}
+decodeUnicodeChar :: String -> Char
+decodeUnicodeChar s = chr (decodeOcamlInt ("0x" ++ (drop 3 (init s))))

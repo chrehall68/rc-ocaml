@@ -176,7 +176,7 @@ tokens :-
   }
   <quoted> {
     \"                                                          { exitQuotedString }
-    -- TODO - handle unicode characters?
+    \\ u \{ [$hexDigit]+ \}                                     { nextQuotedStringUnicodeChar }
     (@escape | $white | [^ \\])                                 { nextQuotedStringChar }
     \\ \n $white*                                               ;  -- ignore whitespace following backslash and newline
   }
@@ -247,6 +247,15 @@ nextQuotedStringChar (_, _, _, s) len = do
   let stringState = fromJust (quotedString userState)
   alexSetUserState (userState {
     quotedString = Just (stringState { quotedReversed = decodeChar (take len s) : quotedReversed stringState })
+  })
+  scanToken
+
+nextQuotedStringUnicodeChar :: AlexAction Token
+nextQuotedStringUnicodeChar (_, _, _, s) len = do
+  userState <- alexGetUserState
+  let stringState = fromJust (quotedString userState)
+  alexSetUserState (userState {
+    quotedString = Just (stringState { quotedReversed = decodeUnicodeChar (take len s) : quotedReversed stringState })
   })
   scanToken
 
