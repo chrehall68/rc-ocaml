@@ -274,8 +274,8 @@ alexEOF :: Alex Token
 alexEOF = do
   userState <- alexGetUserState
   case (delimitedString userState, quotedString userState) of
-    (Just _, _)        -> alexError "unterminated string"
-    (_, Just _)        -> alexError "unterminated string"
+    (Just _, _)        -> alexError $ "unterminated string literal; did not find matching |" ++ delimiter (fromJust (delimitedString userState)) ++ "}"
+    (_, Just _)        -> alexError "unterminated string literal; no matching closing quote found"
     (Nothing, Nothing) -> return TokenEOF
 
 -- similar to alexMonadScan, but calls alexScanUser instead of just alexScan
@@ -287,7 +287,7 @@ scanToken = do
   case alexScanUser us inp sc of
     AlexEOF -> alexEOF
     AlexError ((AlexPn _ line col), _, _, _) ->
-      alexError ("lexical error at line " ++ show line ++ ", column " ++ show col)
+      alexError ("Unexpected token at line " ++ show line ++ ", column " ++ show col)
     AlexSkip inp' _ -> alexSetInput inp' >> scanToken
     AlexToken inp' len action -> do
       alexSetInput inp'
