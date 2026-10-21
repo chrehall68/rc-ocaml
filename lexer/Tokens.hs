@@ -22,7 +22,9 @@ data Token
   | TokenInt IntLiteral
   | TokenDouble Double
   | TokenChar Char
-  | TokenString String
+  | TokenString String -- string is the contents of the string, without quotes/delimiters
+  | TokenLabel String -- string is just the label name
+  | TokenOptionalLabel String -- string is just the label name
   | TokenInfix String
   | TokenPrefix String
   | -- keywords
@@ -73,7 +75,7 @@ data Token
   | TokenVirtual
   | TokenWhile
   | TokenWith
-  | -- multi-character symbols and punctuation
+  | -- keyword symbols
     TokenPhysicalNE
   | TokenHash
   | TokenAmpersand

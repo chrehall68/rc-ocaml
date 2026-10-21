@@ -20,9 +20,12 @@ $lower =
 $upper =
     [A-Z À-Ö Ø-Þ Œ Š Ž Ÿ ẞ]
 
+-- identifiers
 $letter = [$lower $upper]
 $identifierSuffix = [$letter $digit \_ \']
 $ident = [$letter \_]
+@lowercaseIdent = [$lower \_] $identifierSuffix*
+@capitalizedIdent = [$upper \_] $identifierSuffix*
 
 -- integers
 @base10Literal = $digit [ $digit \_ ]*
@@ -142,25 +145,29 @@ tokens :-
     \|\|                                { regularToken (const TokenPipePipe) }
     \}                                  { regularToken (const TokenRBrace) }
     \~                                  { regularToken (const TokenTilde) }
-    -- prefix/infix operators
-    @infixSymbol                        { regularToken (\s -> TokenInfix s) }
-    @prefixSymbol                       { regularToken (\s -> TokenPrefix s) }
     -- identifiers
-    $upper $identifierSuffix*           { regularToken (\s -> TokenCapitalizedIdentifier s) }
-    [$lower \_] $identifierSuffix*      { regularToken (\s -> TokenLowercaseIdentifier s) }
+    @capitalizedIdent                   { regularToken (\s -> TokenCapitalizedIdentifier s) }
+    @lowercaseIdent                     { regularToken (\s -> TokenLowercaseIdentifier s) }
     -- integers
-    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int32}) ) }
-    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=Int64}) ) }
-    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt (init s)), representation=NativeInt}) ) }
+    @int32Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=Int32}) ) }
+    @int64Literal                       { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=Int64}) ) }
+    @nativeIntLiteral                   { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt . init $ s), representation=NativeInt}) ) }
     @integerLiteral                     { regularToken (\s -> TokenInt (IntLiteral {value=(decodeOcamlInt s), representation=Unspecified}) ) }
     -- floats
     @floatBase10                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
     @floatBase16                        { regularToken (\s -> TokenDouble (decodeOcamlDouble s) )}
     -- characters
-    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar (tail (init s)))) }
+    \' (@regularChar | @escape) \'      { regularToken (\s -> TokenChar (decodeChar (tail . init $ s))) }
     -- strings
     \"                                  { enterQuotedString }
     \{ [$lower \_]* \|                  { enterDelimitedString }
+    -- naming labels
+    -- see https://ocaml.org/manual/5.3/lex.html#sss:labelname
+    \~ @lowercaseIdent \:               { regularToken (\s -> TokenLabel (tail . init $ s)) }
+    \? @lowercaseIdent \:               { regularToken (\s -> TokenOptionalLabel (tail . init $ s)) }
+    -- prefix/infix operators
+    @infixSymbol                        { regularToken (\s -> TokenInfix s) }
+    @prefixSymbol                       { regularToken (\s -> TokenPrefix s) }
   }
   -- the rest of the machinery for recognizing strings
   <delimited> {
