@@ -4,6 +4,7 @@ import Tokens
 import Data.Array
 import Data.Char
 import Data.Maybe
+import Control.Monad
 } 
 
 %wrapper "monadUserState"
@@ -303,15 +304,11 @@ closeNestedComment _ _ = do
   alexSetUserState (userState {
     commentActive = Just (commentState { commentDepth = (commentDepth commentState) - 1 })
   })
-  case (commentDepth commentState) of 
-    1 ->  do 
-          -- This code automatically switches the parser state back to normal
-          userState <- alexGetUserState
-          let commentState = fromJust (commentActive userState)
-          alexSetUserState (userState { commentActive = Nothing })
-          alexSetStartCode 0
-          scanToken
-    _ -> scanToken
+  -- This code automatically switches the parser state back to normal
+  when ((commentDepth commentState) == 1) $ do
+    alexSetUserState (userState { commentActive = Nothing })
+    alexSetStartCode 0
+  scanToken
 
 regularToken :: (String -> Token) -> AlexAction Token
 regularToken f = \(_, _, _, s) len -> return (f (take len s))
