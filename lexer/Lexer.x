@@ -305,6 +305,7 @@ closeNestedComment _ _ = do
   })
   case (commentDepth commentState) of 
     1 ->  do 
+          -- This code automatically switches the parser state back to normal
           userState <- alexGetUserState
           let commentState = fromJust (commentActive userState)
           alexSetUserState (userState { commentActive = Nothing })
