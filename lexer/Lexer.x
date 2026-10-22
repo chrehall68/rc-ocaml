@@ -297,23 +297,20 @@ openNestedComment _ _ = do
   scanToken
 
 closeNestedComment :: AlexAction Token
-closeNestedComment a b = do
+closeNestedComment _ _ = do
   userState <- alexGetUserState
   let commentState = fromJust (commentActive userState)
   alexSetUserState (userState {
     commentActive = Just (commentState { commentDepth = (commentDepth commentState) - 1 })
   })
   case (commentDepth commentState) of 
-    1 -> exitComment a b
+    1 ->  do 
+          userState <- alexGetUserState
+          let commentState = fromJust (commentActive userState)
+          alexSetUserState (userState { commentActive = Nothing })
+          alexSetStartCode 0
+          scanToken
     _ -> scanToken
-
-exitComment :: AlexAction Token
-exitComment _ _ = do
-  userState <- alexGetUserState
-  let commentState = fromJust (commentActive userState)
-  alexSetUserState (userState { commentActive = Nothing })
-  alexSetStartCode 0
-  return TokenComment
 
 regularToken :: (String -> Token) -> AlexAction Token
 regularToken f = \(_, _, _, s) len -> return (f (take len s))

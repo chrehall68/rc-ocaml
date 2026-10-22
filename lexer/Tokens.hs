@@ -120,7 +120,6 @@ data Token
   | TokenRBrace
   | TokenTilde
   | TokenEOF
-  | TokenComment
   deriving (Show, Eq)
 
 removeUnderscore :: String -> String
