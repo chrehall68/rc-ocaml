@@ -60,46 +60,55 @@ tokens :-
     assert                              { regularToken (const TokenAssert) }
     asr                                 { regularToken (const TokenAsr) }
     begin                               { regularToken (const TokenBegin) }
+    class                               { regularToken (const TokenClass) }
     constraint                          { regularToken (const TokenConstraint) }
     do                                  { regularToken (const TokenDo) }
     done                                { regularToken (const TokenDone) }
     downto                              { regularToken (const TokenDownto) }
     else                                { regularToken (const TokenElse) }
+    end                                 { regularToken (const TokenEnd) }
     exception                           { regularToken (const TokenException) }
     external                            { regularToken (const TokenExternal) }
     false                               { regularToken (const TokenFalse) }
     for                                 { regularToken (const TokenFor) }
     fun                                 { regularToken (const TokenFun) }
+    function                            { regularToken (const TokenFunction) }
     functor                             { regularToken (const TokenFunctor) }
     if                                  { regularToken (const TokenIf) }
     in                                  { regularToken (const TokenIn) }
     include                             { regularToken (const TokenInclude) }
     inherit                             { regularToken (const TokenInherit) }
+    initializer                         { regularToken (const TokenInitializer) }
     land                                { regularToken (const TokenLand) }
     lazy                                { regularToken (const TokenLazy) }
     let                                 { regularToken (const TokenLet) }
     lor                                 { regularToken (const TokenLor) }
     lsl                                 { regularToken (const TokenLsl) }
+    lsr                                 { regularToken (const TokenLsr) }
     lxor                                { regularToken (const TokenLxor) }
     match                               { regularToken (const TokenMatch) }
     method                              { regularToken (const TokenMethod) }
     mod                                 { regularToken (const TokenMod) }
     module                              { regularToken (const TokenModule) }
+    mutable                             { regularToken (const TokenMutable) }
     new                                 { regularToken (const TokenNew) }
     nonrec                              { regularToken (const TokenNonrec) }
     object                              { regularToken (const TokenObject) }
     of                                  { regularToken (const TokenOf) }
     open                                { regularToken (const TokenOpen) }
+    or                                  { regularToken (const TokenOr) }
     private                             { regularToken (const TokenPrivate) }
     rec                                 { regularToken (const TokenRec) }
     sig                                 { regularToken (const TokenSig) }
     struct                              { regularToken (const TokenStruct) }
     then                                { regularToken (const TokenThen) }
+    to                                  { regularToken (const TokenTo) }
     true                                { regularToken (const TokenTrue) }
     try                                 { regularToken (const TokenTry) }
     type                                { regularToken (const TokenType) }
     val                                 { regularToken (const TokenVal) }
     virtual                             { regularToken (const TokenVirtual) }
+    when                                { regularToken (const TokenWhen) }
     while                               { regularToken (const TokenWhile) }
     with                                { regularToken (const TokenWith) }
     -- keyword symbols

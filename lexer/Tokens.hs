@@ -33,46 +33,55 @@ data Token
   | TokenAssert
   | TokenAsr
   | TokenBegin
+  | TokenClass
   | TokenConstraint
   | TokenDo
   | TokenDone
   | TokenDownto
   | TokenElse
+  | TokenEnd
   | TokenException
   | TokenExternal
   | TokenFalse
   | TokenFor
   | TokenFun
+  | TokenFunction
   | TokenFunctor
   | TokenIf
   | TokenIn
   | TokenInclude
   | TokenInherit
+  | TokenInitializer
   | TokenLand
   | TokenLazy
   | TokenLet
   | TokenLor
   | TokenLsl
+  | TokenLsr
   | TokenLxor
   | TokenMatch
   | TokenMethod
   | TokenMod
   | TokenModule
+  | TokenMutable
   | TokenNew
   | TokenNonrec
   | TokenObject
   | TokenOf
   | TokenOpen
+  | TokenOr
   | TokenPrivate
   | TokenRec
   | TokenSig
   | TokenStruct
   | TokenThen
+  | TokenTo
   | TokenTrue
   | TokenTry
   | TokenType
   | TokenVal
   | TokenVirtual
+  | TokenWhen
   | TokenWhile
   | TokenWith
   | -- keyword symbols
