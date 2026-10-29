@@ -80,7 +80,7 @@ data Token
   | TokenHash
   | TokenAmpersand
   | TokenAmpersandAmpersand
-  | TokenQuote
+  | TokenQuote -- single quote
   | TokenLParen
   | TokenRParen
   | TokenStar

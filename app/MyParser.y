@@ -11,18 +11,113 @@ import Data.Char
 %error { parseError }
 
 %token
-      INT                { TokenInt $$ }
-      -- let             { TokenLet }
-      -- in              { TokenIn }
-      -- int             { TokenInt $$ }
-      -- var             { TokenVar $$ }
-      -- '='             { TokenEq }
-      -- '+'             { TokenPlus }
-      -- '-'             { TokenMinus }
-      -- '*'             { TokenTimes }
-      -- '/'             { TokenDiv }
-      -- '('             { TokenOB }
-      -- ')'             { TokenCB }
+      -- literals and identifiers
+      INT         { TokenInt $$ }
+      DOUBLE      { TokenDouble $$ }
+      CHAR        { TokenChar $$ }
+      STRING      { TokenString $$ }
+      LABEL       { TokenLabel $$ }
+      OPTLABEL    { TokenOptionalLabel $$ }
+      UIDENT      { TokenCapitalizedIdentifier $$ }
+      LIDENT      { TokenLowercaseIdentifier $$ }
+      INFIX       { TokenInfix $$ }
+      PREFIX      { TokenPrefix $$ }
+
+      -- keywords
+      AND         { TokenAnd }
+      AS          { TokenAs }
+      ASSERT      { TokenAssert }
+      ASR         { TokenAsr }
+      BEGIN       { TokenBegin }
+      CONSTRAINT  { TokenConstraint }
+      DO          { TokenDo }
+      DONE        { TokenDone }
+      DOWNTO      { TokenDownto }
+      ELSE        { TokenElse }
+      EXCEPTION   { TokenException }
+      EXTERNAL    { TokenExternal }
+      FALSE       { TokenFalse }
+      FOR         { TokenFor }
+      FUN         { TokenFun }
+      FUNCTOR     { TokenFunctor }
+      IF          { TokenIf }
+      IN          { TokenIn }
+      INCLUDE     { TokenInclude }
+      INHERIT     { TokenInherit }
+      LAND        { TokenLand }
+      LAZY        { TokenLazy }
+      LET         { TokenLet }
+      LOR         { TokenLor }
+      LSL         { TokenLsl }
+      LXOR        { TokenLxor }
+      MATCH       { TokenMatch }
+      METHOD      { TokenMethod }
+      MOD         { TokenMod }
+      MODULE      { TokenModule }
+      NEW         { TokenNew }
+      NONREC      { TokenNonrec }
+      OBJECT      { TokenObject }
+      OF          { TokenOf }
+      OPEN        { TokenOpen }
+      PRIVATE     { TokenPrivate }
+      REC         { TokenRec }
+      SIG         { TokenSig }
+      STRUCT      { TokenStruct }
+      THEN        { TokenThen }
+      TRUE        { TokenTrue }
+      TRY         { TokenTry }
+      TYPE        { TokenType }
+      VAL         { TokenVal }
+      VIRTUAL     { TokenVirtual }
+      WHILE       { TokenWhile }
+      WITH        { TokenWith }
+
+      -- keyword symbols
+      '!='        { TokenPhysicalNE }
+      '#'         { TokenHash }
+      '&'         { TokenAmpersand }
+      '&&'        { TokenAmpersandAmpersand }
+      QUOTE       { TokenQuote } -- single quote
+      '('         { TokenLParen }
+      ')'         { TokenRParen }
+      '*'         { TokenStar }
+      '+'         { TokenPlus }
+      ','         { TokenComma }
+      '-'         { TokenMinus }
+      '-.'        { TokenMinusDot }
+      '->'        { TokenArrow }
+      '.'         { TokenDot }
+      '..'        { TokenDotDot }
+      '.~'        { TokenDotTilde }
+      ':'         { TokenColon }
+      '::'        { TokenColonColon }
+      ':='        { TokenColonEq }
+      ':>'        { TokenColonGt }
+      ';'         { TokenSemi }
+      ';;'        { TokenSemiSemi }
+      '<'         { TokenLt }
+      '<-'        { TokenLeftArrow }
+      '='         { TokenEq }
+      '>'         { TokenGt }
+      '>]'        { TokenGtRBracket }
+      '>}'        { TokenGtRBrace }
+      '?'         { TokenQuestion }
+      '['         { TokenLBracket }
+      '[<'        { TokenLBracketLt }
+      '[>'        { TokenLBracketGt }
+      '[|'        { TokenLBracketPipe }
+      ']'         { TokenRBracket }
+      '_'         { TokenUnderscore }
+      BACKTICK    { TokenBacktick }
+      '{'         { TokenLBrace }
+      '{<'        { TokenLBraceLt }
+      '|'         { TokenPipe }
+      '|]'        { TokenPipeRBracket }
+      '||'        { TokenPipePipe }
+      '}'         { TokenRBrace }
+      '~'         { TokenTilde }
+
+      EOF         { TokenEOF }
 
 %%
 
