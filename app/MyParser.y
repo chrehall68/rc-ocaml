@@ -6,7 +6,8 @@ import Tokens
 import Data.Char
 }
 
-%name calc
+%monad { ParseResult } { (>>=) } { return }
+%name parse Program
 %tokentype { Token }
 %error { parseError }
 
@@ -132,6 +133,26 @@ import Data.Char
 
 -- Define your BNF grammar rules here
 
+-- Macros for faster development
+-- allows equivalent of p?
+opt(p)
+  : p          { Just $1 }
+  | {- empty -} { Nothing }
+
+-- helper for `many`
+many_rev(p)
+  :                { [] }
+  | many_rev(p) p  { $2 : $1 }
+-- allows equivalent of p*
+many(p)  : many_rev(p)  { reverse $1 }
+
+-- helper for `many1`
+many1_rev(p)
+  : p              { [$1] }
+  | many1_rev(p) p { $2 : $1 }
+-- allows equivalent of p+
+many1(p) : many1_rev(p) { reverse $1 }
+
 -- 11.3 Names (https://ocaml.org/manual/5.3/names.html)
 
 -- naming objects
@@ -218,11 +239,64 @@ ExtendedModuleName
   : ModuleName                                      { ExtendedModuleName $1 [] }
   | ExtendedModuleName '(' ExtendedModulePath ')'   { applyFunctor $1 $3 }
 
+-- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
+-- TODO - add more
+Constant 
+  : INT                  { IntConstant $1 }
+  | DOUBLE               { DoubleConstant $1 }
+  | CHAR                 { CharConstant $1 }
+  | STRING               { StringConstant $1 }
+
+-- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
+Expr
+  : Constant                  { Expr $1 }
+
+-- 11.10 Module Types (https://ocaml.org/manual/5.3/modtypes.html)
+-- TODO: fill out this section
+-- Specification :                               { Specification }
+
+-- 11.11 Module Expressions (https://ocaml.org/manual/5.3/modules.html)
+-- The manual writes this as
+--   { ;; } ( definition | expr ) { { ;; } definition | ;; expr } { ;; }
+-- but written out literally it is ambiguous: in `;; ;; expr` the parser
+-- can't tell which `;;` belongs to the `{ ;; }` run and which to `;; expr`.
+-- so, instead, we give every `;;` exactly one role:
+-- either it introduces an expr, or it is a stray separator.
+ModuleItems
+  : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
+
+ModuleItem
+  : Definition        { [$1] }
+  | ';;' Expr         { [$2] }
+  | ';;'              { [] }
+
+DefinitionOrExpr 
+  : Definition        { $1 }
+  | Expr              { $1 }
+
+-- TODO: use actual definitions
+Definition 
+  : LET                  { Definition }
+
+
+-- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
+
+Program
+  : UnitInterface UnitImplementation           { Program $1 $2 }
+
+-- UnitInterface : many(Specification opt(';;'))             { $1 }
+UnitInterface :                               { UnitInterface }
+ 
+UnitImplementation : opt(ModuleItems)         { UnitImplementation $1 }
+
+
 {
+
+type ParseResult a = Either String a
 -- TODO - recover from errors
 -- see https://haskell-happy.readthedocs.io/en/latest/using.html#handling-parse-errors
-parseError :: [Token] -> a
-parseError _ = error "Parse error"
+parseError :: [Token] -> ParseResult a
+parseError t = Left ("Parse error on " ++ (show t))
 
 appendModule :: ModulePath -> String -> ModulePath
 appendModule (ModulePath ms) m = ModulePath (ms ++ [m])
