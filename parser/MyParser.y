@@ -17,7 +17,7 @@ import Data.Char
 %right ';'
 %left ','
 %right '::'
-%nonassoc CONSTR_APPLICATION
+%nonassoc CONSTR_APPLICATION -- for constructors, polymorphic variants, and function applications
 
 %token
       -- literals and identifiers
@@ -253,7 +253,14 @@ ExtendedModuleName
 -- TODO: fill out this section
 
 -- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
-Constant 
+-- had to break this up into multiple rules to avoid ambiguity
+Constant
+  : LiteralConstant      { $1 }
+  | BACKTICK TagName     { ConstantPolymorphicVariant $2 }
+  | Constr               { ConstantVariant $1 }
+
+-- constants that can't be confused with constructor application
+LiteralConstant
   : INT                  { ConstantInt $1 }
   | DOUBLE               { ConstantDouble $1 }
   | CHAR                 { ConstantChar $1 }
@@ -264,8 +271,6 @@ Constant
   | BEGIN END            { ConstantUnit }
   | '[' ']'              { ConstantList }
   | '[|' '|]'            { ConstantArray }
-  | BACKTICK UIDENT      { ConstantPolymorphicVariant $2 }
-  | Constr               { ConstantVariant $1 }
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
@@ -273,24 +278,39 @@ TypeExpr
   : {- empty -}             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
--- TODO: fill out this section
+-- To avoid ambiguity, we've broken expressions up into tiers:
+--   AtomExpr   - can be the head of a function application
+--   SimpleExpr - can be an argument (an atom, or a nullary constructor/tag)
+--   Expr       - everything else
+-- Arguments and constructor arguments are SimpleExprs, so that `f a b` can't
+-- be read as `f (a b)`, `(f a) b`, or `f a b`. Also, nullary constructors aren't atoms,
+-- so `C 1` can only be constructor application.
 Expr
-  : Constant                  { ExprConstant $1 }
+  : SimpleExpr                { $1 }
+  | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
+  | Constr SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
+  | BACKTICK TagName SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
+  | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
+  -- function application
+  | AtomExpr many1(Argument)  { ExprFunctionApplication $1 $2 }
+
+SimpleExpr
+  : AtomExpr                  { $1 }
+  | Constr                    { ExprConstant (ConstantVariant $1) }
+  | BACKTICK TagName          { ExprConstant (ConstantPolymorphicVariant $2) }
+
+AtomExpr
+  : LiteralConstant            { ExprConstant $1 }
   | ValuePath                  { ExprPath $1 }
   | '(' Expr ')'               { $2 }
   | BEGIN Expr END             { $2 }
   | '(' Expr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
-  | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
-  | Constr Expr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
-  | BACKTICK TagName Expr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
-  | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
   | '[' ExprList ']'   { ExprCons $2 }
   | '[|' ExprList '|]' { ExprArray (init $2) }
   | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
   | '{' Expr WITH ExprFieldList '}'  { ExprRecord (Just $2) $4 }
 
--- built as its own list (rather than by nesting `Expr ',' Expr`) so that
--- `(a, b), c` and `a, (b, c)` stay distinguishable from `a, b, c`
+-- the resulting list is in reverse order of appearance in the tuple
 ExprCommaList
   : Expr ',' Expr               { [$3, $1] }
   | ExprCommaList ',' Expr      { $3 : $1 }
@@ -313,6 +333,14 @@ ExprFieldList
   : RecordField ';' ExprFieldList  { $1 : $3 }
   | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
   | RecordField                     { [$1] }
+
+-- LABEL/OPTLABEL already include the trailing `:` (`~x:`)
+Argument
+  : SimpleExpr           { UnlabeledArgument $1 }
+  | '~' LIDENT           { LabeledArgument $2 Nothing }
+  | LABEL SimpleExpr     { LabeledArgument $1 (Just $2) }
+  | '?' LIDENT           { OptionalArgument $2 Nothing }
+  | OPTLABEL SimpleExpr  { OptionalArgument $1 (Just $2) }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)

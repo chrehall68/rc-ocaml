@@ -44,7 +44,7 @@ spec = do
     it "rejects stray tokens" $
       parseSource ")" `shouldSatisfy` isLeft
     it "rejects two expressions without a ;; between them" $
-      exprsOf "a b c" `shouldSatisfy` isLeft
+      exprsOf "C 1 2" `shouldSatisfy` isLeft
 
   describe "module items" $ do
     it "separates expressions with ;;" $
@@ -96,12 +96,62 @@ spec = do
   describe "constructor application" $ do
     it "applies a constructor to an argument" $
       expr "C 1" `shouldBe` Right (ExprNonconstantVariant (Path Nothing "C") (int 1))
-    it "applies a constructor to a constructor application" $
-      expr "C D 1"
+    it "applies a constructor to a parenthesized constructor application" $
+      expr "C (D 1)"
         `shouldBe` Right
           (ExprNonconstantVariant (Path Nothing "C") (ExprNonconstantVariant (Path Nothing "D") (int 1)))
+    it "applies a constructor to a nullary constructor" $
+      expr "C D" `shouldBe` Right (ExprNonconstantVariant (Path Nothing "C") (variant "D"))
+    it "only takes a simple expression as its argument" $
+      expr "C f x" `shouldSatisfy` isLeft
     it "applies a polymorphic variant tag" $
       expr "`Tag 1" `shouldBe` Right (ExprNonconstantPolymorphicVariant "Tag" (int 1))
+
+  describe "function application" $ do
+    it "applies a function to one argument" $
+      expr "f 1" `shouldBe` Right (ExprFunctionApplication (var "f") [UnlabeledArgument (int 1)])
+    it "applies a function to several arguments at once" $
+      expr "f a b"
+        `shouldBe` Right (ExprFunctionApplication (var "f") [UnlabeledArgument (var "a"), UnlabeledArgument (var "b")])
+    it "treats a parenthesized application as a single argument" $
+      expr "f (g a) b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              (var "f")
+              [ UnlabeledArgument (ExprFunctionApplication (var "g") [UnlabeledArgument (var "a")]),
+                UnlabeledArgument (var "b")
+              ]
+          )
+    it "allows nullary constructors as arguments" $
+      expr "f C 1"
+        `shouldBe` Right (ExprFunctionApplication (var "f") [UnlabeledArgument (variant "C"), UnlabeledArgument (int 1)])
+    it "applies qualified functions" $
+      expr "List.map f"
+        `shouldBe` Right (ExprFunctionApplication (qualifiedVar ["List"] "map") [UnlabeledArgument (var "f")])
+    it "parses labeled and optional arguments" $
+      expr "f ~x:1 ~y ?z:2 ?w"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              (var "f")
+              [ LabeledArgument "x" (Just (int 1)),
+                LabeledArgument "y" Nothing,
+                OptionalArgument "z" (Just (int 2)),
+                OptionalArgument "w" Nothing
+              ]
+          )
+    it "binds tighter than ," $
+      expr "f a, g b"
+        `shouldBe` Right
+          ( ExprTuple
+              [ ExprFunctionApplication (var "f") [UnlabeledArgument (var "a")],
+                ExprFunctionApplication (var "g") [UnlabeledArgument (var "b")]
+              ]
+          )
+    it "binds tighter than ::" $
+      expr "f a :: b"
+        `shouldBe` Right (ExprCons [ExprFunctionApplication (var "f") [UnlabeledArgument (var "a")], var "b"])
+    it "can't be the application of a bare constructor" $
+      expr "C 1" `shouldBe` Right (ExprNonconstantVariant (Path Nothing "C") (int 1))
 
   describe "tuples" $ do
     it "parses a flat tuple" $

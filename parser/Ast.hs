@@ -40,6 +40,12 @@ data TypeExpr = TypeExpr
 data RecordField = RecordField Path (Maybe TypeExpr) Expr
   deriving (Show, Eq)
 
+data Argument
+  = UnlabeledArgument Expr
+  | LabeledArgument String (Maybe Expr)
+  | OptionalArgument String (Maybe Expr)
+  deriving (Show, Eq)
+
 data Expr
   = ExprConstant Constant
   | -- refers to a (potentially module-qualified) name
@@ -58,6 +64,7 @@ data Expr
   | ExprArray [Expr]
   | -- source record, changed fields
     ExprRecord (Maybe Expr) [RecordField]
+  | ExprFunctionApplication Expr [Argument]
   deriving (Show, Eq)
 
 data DefinitionOrExpr
