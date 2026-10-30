@@ -203,9 +203,11 @@ ValuePath
   : ValueName                   { Path Nothing $1 }
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
+-- can't just use ModulePath here because
+-- of ambiguity with ModuleName vs ConstrName since both start with UIDENT
 Constr
   : ConstrName                  { Path Nothing $1 }
-  | ModulePath '.' ConstrName   { Path (Just $1) $3 }
+  | ModuleName '.' Constr       { appendPath $1 $3 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -317,6 +319,10 @@ type ParseResult a = Either String a
 parseError :: [Token] -> ParseResult a
 parseError t = Left ("Parse error on " ++ (show t))
 
+appendPath :: String -> Path -> Path
+appendPath prefix (Path maybePath name) = case maybePath of 
+  Nothing -> Path (Just (ModulePath [prefix])) name;
+  Just (ModulePath path) -> Path (Just (ModulePath (prefix : path))) name
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])

@@ -2,12 +2,6 @@ module Ast where
 
 import Tokens
 
-data AstNode
-  = AstInt IntLiteral
-  | AstFloat Float
-  | AstProgram Program
-  deriving (Show)
-
 -- names (https://ocaml.org/manual/5.3/names.html)
 newtype ModulePath = ModulePath [String]
   deriving (Show)
