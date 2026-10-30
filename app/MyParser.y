@@ -269,6 +269,8 @@ Constant
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
+TypeExpr 
+  : {- empty -}             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- TODO: fill out this section
@@ -277,13 +279,15 @@ Expr
   | ValuePath                  { ExprPath $1 }
   | '(' Expr ')'               { $2 }
   | BEGIN Expr END             { $2 }
-  -- TODO: (expr : typeexpr)
+  | '(' Expr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
   | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
   | Constr Expr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
   | BACKTICK TagName Expr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
-  | ExprConsList %prec BELOW_COMMA  { ExprCons $1 }
-  | '[' ExprList ']'  { ExprCons $2 }
-  | '[|' ExprList '|]'  { ExprArray (init $2) }
+  | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
+  | '[' ExprList ']'   { ExprCons $2 }
+  | '[|' ExprList '|]' { ExprArray (init $2) }
+  | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
+  | '{' Expr WITH ExprFieldList '}'  { ExprRecord (Just $2) $4 }
 
 -- built as its own list (rather than by nesting `Expr ',' Expr`) so that
 -- `(a, b), c` and `a, (b, c)` stay distinguishable from `a, b, c`
@@ -299,6 +303,16 @@ ExprList
   : Expr ';' ExprList  { $1 : $3 }
   | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
   | Expr               { [$1, ExprConstant ConstantList] }
+
+RecordField
+  : Field          { RecordField $1 Nothing (ExprPath $1) }
+  | Field ':' TypeExpr { RecordField $1 (Just $3) (ExprPath $1) }
+  | Field '=' Expr     { RecordField $1 Nothing $3 }
+  | Field ':' TypeExpr '=' Expr { RecordField $1 (Just $3) $5 }
+ExprFieldList
+  : RecordField ';' ExprFieldList  { $1 : $3 }
+  | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
+  | RecordField                     { [$1] }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)

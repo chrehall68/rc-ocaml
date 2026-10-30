@@ -34,6 +34,12 @@ data Constant
   | ConstantVariant Path -- constant variants are variants without arguments
   deriving (Show)
 
+data TypeExpr = TypeExpr
+  deriving (Show)
+
+data RecordField = RecordField Path (Maybe TypeExpr) Expr
+  deriving (Show)
+
 data Expr
   = ExprConstant Constant
   | -- refers to a (potentially module-qualified) name
@@ -42,6 +48,7 @@ data Expr
     ExprNonconstantVariant Path Expr
   | -- `Tagname expr would give (ExprNonconstantPolymorphicVariant "Tagname" expr)
     ExprNonconstantPolymorphicVariant String Expr
+  | ExprAnnotated Expr TypeExpr
   | ExprTuple [Expr]
   | -- the expressions are in order of appearance (left to right)
     -- utop evaluates the expression from right to left, but technically
@@ -49,6 +56,8 @@ data Expr
     -- we represent them as ExprCons too)
     ExprCons [Expr]
   | ExprArray [Expr]
+  | -- source record, changed fields
+    ExprRecord (Maybe Expr) [RecordField]
   deriving (Show)
 
 data DefinitionOrExpr
