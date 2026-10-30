@@ -28,10 +28,16 @@ data ExtendedPath = ExtendedPath (Maybe ExtendedModulePath) String
   deriving (Show)
 
 data Constant
-  = IntConstant IntLiteral
-  | DoubleConstant Double
-  | CharConstant Char
-  | StringConstant String
+  = ConstantInt IntLiteral
+  | ConstantDouble Double
+  | ConstantChar Char
+  | ConstantString String
+  | ConstantBool Bool
+  | ConstantUnit
+  | ConstantList -- the empty list []
+  | ConstantArray -- the empty array [||]
+  | ConstantPolymorphicVariant String -- ie `Tagname would give ConstantPolymorphicVariant "Tagname"
+  | ConstantVariant Path -- constant variants are variants without arguments
   deriving (Show)
 
 data DefinitionOrExpr

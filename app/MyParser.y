@@ -227,33 +227,52 @@ ClasstypePath
   : ClassName                               { ExtendedPath Nothing $1 }
   | ExtendedModulePath '.' ClassName        { ExtendedPath (Just $1) $3 }
 
+DotModuleName : '.' ModuleName { $2 }
 ModulePath
-  : ModuleName                  { ModulePath [$1] }
-  | ModulePath '.' ModuleName   { appendModule $1 $3 }
+  : ModuleName many(DotModuleName)                  { ModulePath ($1 : $2) }
 
+DotExtendedModuleName : '.' ExtendedModuleName { $2 }
 ExtendedModulePath
-  : ExtendedModuleName                              { ExtendedModulePath [$1] }
-  | ExtendedModulePath '.' ExtendedModuleName       { appendExtendedModule $1 $3 }
+  : ExtendedModuleName many(DotExtendedModuleName)                  { ExtendedModulePath ($1 : $2) }
 
 ExtendedModuleName
   : ModuleName                                      { ExtendedModuleName $1 [] }
   | ExtendedModuleName '(' ExtendedModulePath ')'   { applyFunctor $1 $3 }
 
+-- 11.4 Type Expressions (https://ocaml.org/manual/5.3/types.html)
+-- TODO: fill out this section
+
 -- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
--- TODO - add more
 Constant 
-  : INT                  { IntConstant $1 }
-  | DOUBLE               { DoubleConstant $1 }
-  | CHAR                 { CharConstant $1 }
-  | STRING               { StringConstant $1 }
+  : INT                  { ConstantInt $1 }
+  | DOUBLE               { ConstantDouble $1 }
+  | CHAR                 { ConstantChar $1 }
+  | STRING               { ConstantString $1 }
+  | FALSE                { ConstantBool False }
+  | TRUE                 { ConstantBool True }
+  | '(' ')'              { ConstantUnit }
+  | BEGIN END            { ConstantUnit }
+  | '[' ']'              { ConstantList }
+  | '[|' '|]'            { ConstantArray }
+  | BACKTICK UIDENT      { ConstantPolymorphicVariant $2 }
+  | Constr               { ConstantVariant $1 }
+
+-- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
+-- TODO: fill out this section
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
+-- TODO: fill out this section
 Expr
   : Constant                  { Expr $1 }
 
+-- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
+-- TODO: fill out this section
+
+-- 11.9 Classes (https://ocaml.org/manual/5.3/classes.html)
+-- TODO: fill out this section
+
 -- 11.10 Module Types (https://ocaml.org/manual/5.3/modtypes.html)
 -- TODO: fill out this section
--- Specification :                               { Specification }
 
 -- 11.11 Module Expressions (https://ocaml.org/manual/5.3/modules.html)
 -- The manual writes this as
@@ -298,11 +317,6 @@ type ParseResult a = Either String a
 parseError :: [Token] -> ParseResult a
 parseError t = Left ("Parse error on " ++ (show t))
 
-appendModule :: ModulePath -> String -> ModulePath
-appendModule (ModulePath ms) m = ModulePath (ms ++ [m])
-
-appendExtendedModule :: ExtendedModulePath -> ExtendedModuleName -> ExtendedModulePath
-appendExtendedModule (ExtendedModulePath ms) m = ExtendedModulePath (ms ++ [m])
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])
