@@ -6,7 +6,8 @@ import Tokens
 import Data.Char
 }
 
-%name calc
+%monad { ParseResult } { (>>=) } { return }
+%name parse Program
 %tokentype { Token }
 %error { parseError }
 
@@ -132,6 +133,26 @@ import Data.Char
 
 -- Define your BNF grammar rules here
 
+-- Macros for faster development
+-- allows equivalent of p?
+opt(p)
+  : p          { Just $1 }
+  | {- empty -} { Nothing }
+
+-- helper for `many`
+many_rev(p)
+  :                { [] }
+  | many_rev(p) p  { $2 : $1 }
+-- allows equivalent of p*
+many(p)  : many_rev(p)  { reverse $1 }
+
+-- helper for `many1`
+many1_rev(p)
+  : p              { [$1] }
+  | many1_rev(p) p { $2 : $1 }
+-- allows equivalent of p+
+many1(p) : many1_rev(p) { reverse $1 }
+
 -- 11.3 Names (https://ocaml.org/manual/5.3/names.html)
 
 -- naming objects
@@ -182,9 +203,11 @@ ValuePath
   : ValueName                   { Path Nothing $1 }
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
+-- can't just use ModulePath here because
+-- of ambiguity with ModuleName vs ConstrName since both start with UIDENT
 Constr
   : ConstrName                  { Path Nothing $1 }
-  | ModulePath '.' ConstrName   { Path (Just $1) $3 }
+  | ModuleName '.' Constr       { appendPath $1 $3 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -206,29 +229,100 @@ ClasstypePath
   : ClassName                               { ExtendedPath Nothing $1 }
   | ExtendedModulePath '.' ClassName        { ExtendedPath (Just $1) $3 }
 
+DotModuleName : '.' ModuleName { $2 }
 ModulePath
-  : ModuleName                  { ModulePath [$1] }
-  | ModulePath '.' ModuleName   { appendModule $1 $3 }
+  : ModuleName many(DotModuleName)                  { ModulePath ($1 : $2) }
 
+DotExtendedModuleName : '.' ExtendedModuleName { $2 }
 ExtendedModulePath
-  : ExtendedModuleName                              { ExtendedModulePath [$1] }
-  | ExtendedModulePath '.' ExtendedModuleName       { appendExtendedModule $1 $3 }
+  : ExtendedModuleName many(DotExtendedModuleName)                  { ExtendedModulePath ($1 : $2) }
 
 ExtendedModuleName
   : ModuleName                                      { ExtendedModuleName $1 [] }
   | ExtendedModuleName '(' ExtendedModulePath ')'   { applyFunctor $1 $3 }
 
+-- 11.4 Type Expressions (https://ocaml.org/manual/5.3/types.html)
+-- TODO: fill out this section
+
+-- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
+Constant 
+  : INT                  { ConstantInt $1 }
+  | DOUBLE               { ConstantDouble $1 }
+  | CHAR                 { ConstantChar $1 }
+  | STRING               { ConstantString $1 }
+  | FALSE                { ConstantBool False }
+  | TRUE                 { ConstantBool True }
+  | '(' ')'              { ConstantUnit }
+  | BEGIN END            { ConstantUnit }
+  | '[' ']'              { ConstantList }
+  | '[|' '|]'            { ConstantArray }
+  | BACKTICK UIDENT      { ConstantPolymorphicVariant $2 }
+  | Constr               { ConstantVariant $1 }
+
+-- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
+-- TODO: fill out this section
+
+-- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
+-- TODO: fill out this section
+Expr
+  : Constant                  { Expr $1 }
+
+-- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
+-- TODO: fill out this section
+
+-- 11.9 Classes (https://ocaml.org/manual/5.3/classes.html)
+-- TODO: fill out this section
+
+-- 11.10 Module Types (https://ocaml.org/manual/5.3/modtypes.html)
+-- TODO: fill out this section
+
+-- 11.11 Module Expressions (https://ocaml.org/manual/5.3/modules.html)
+-- The manual writes this as
+--   { ;; } ( definition | expr ) { { ;; } definition | ;; expr } { ;; }
+-- but written out literally it is ambiguous: in `;; ;; expr` the parser
+-- can't tell which `;;` belongs to the `{ ;; }` run and which to `;; expr`.
+-- so, instead, we give every `;;` exactly one role:
+-- either it introduces an expr, or it is a stray separator.
+ModuleItems
+  : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
+
+ModuleItem
+  : Definition        { [$1] }
+  | ';;' Expr         { [$2] }
+  | ';;'              { [] }
+
+DefinitionOrExpr 
+  : Definition        { $1 }
+  | Expr              { $1 }
+
+-- TODO: use actual definitions
+Definition 
+  : LET                  { Definition }
+
+
+-- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
+
+Program
+  : UnitInterface UnitImplementation           { Program $1 $2 }
+
+-- UnitInterface : many(Specification opt(';;'))             { $1 }
+UnitInterface :                               { UnitInterface }
+ 
+UnitImplementation : opt(ModuleItems)         { UnitImplementation $1 }
+
+
 {
+
+type ParseResult a = Either String a
 -- TODO - recover from errors
 -- see https://haskell-happy.readthedocs.io/en/latest/using.html#handling-parse-errors
-parseError :: [Token] -> a
-parseError _ = error "Parse error"
+parseError :: [Token] -> ParseResult a
+parseError t = Left ("Parse error on " ++ (show t))
 
-appendModule :: ModulePath -> String -> ModulePath
-appendModule (ModulePath ms) m = ModulePath (ms ++ [m])
-
-appendExtendedModule :: ExtendedModulePath -> ExtendedModuleName -> ExtendedModulePath
-appendExtendedModule (ExtendedModulePath ms) m = ExtendedModulePath (ms ++ [m])
+appendPath :: String -> Path -> Path
+appendPath prefix (Path maybePath name) = case maybePath of 
+  Nothing -> Path (Just (ModulePath [prefix])) name;
+  Just (ModulePath path) -> Path (Just (ModulePath (prefix : path))) name
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])

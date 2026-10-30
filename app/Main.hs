@@ -18,6 +18,8 @@ main = do
   source <- getContents
   tokens <- orExit $ alexScanTokens source
   print tokens
+  ast <- orExit $ parse tokens
+  print ast
 
 -- ast <- return $ calc tokens
 -- print ast

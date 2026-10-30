@@ -2,11 +2,6 @@ module Ast where
 
 import Tokens
 
-data AstNode
-  = AstInt IntLiteral
-  | AstFloat Float
-  deriving (Show)
-
 -- names (https://ocaml.org/manual/5.3/names.html)
 newtype ModulePath = ModulePath [String]
   deriving (Show)
@@ -24,4 +19,34 @@ data Path = Path (Maybe ModulePath) String
 
 -- [ extended-module-path . ] name
 data ExtendedPath = ExtendedPath (Maybe ExtendedModulePath) String
+  deriving (Show)
+
+data Constant
+  = ConstantInt IntLiteral
+  | ConstantDouble Double
+  | ConstantChar Char
+  | ConstantString String
+  | ConstantBool Bool
+  | ConstantUnit
+  | ConstantList -- the empty list []
+  | ConstantArray -- the empty array [||]
+  | ConstantPolymorphicVariant String -- ie `Tagname would give ConstantPolymorphicVariant "Tagname"
+  | ConstantVariant Path -- constant variants are variants without arguments
+  deriving (Show)
+
+data DefinitionOrExpr
+  = Definition
+  | Expr Constant
+  deriving (Show)
+
+data ModuleItems = ModuleItems [DefinitionOrExpr]
+  deriving (Show)
+
+data UnitInterface = UnitInterface
+  deriving (Show)
+
+data UnitImplementation = UnitImplementation (Maybe ModuleItems)
+  deriving (Show)
+
+data Program = Program UnitInterface UnitImplementation
   deriving (Show)
