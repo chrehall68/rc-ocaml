@@ -20,6 +20,3 @@ main = do
   print tokens
   ast <- orExit $ parse tokens
   print ast
-
--- ast <- return $ calc tokens
--- print ast
