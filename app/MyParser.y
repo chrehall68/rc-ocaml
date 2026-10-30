@@ -14,6 +14,7 @@ import Data.Char
 -- lowest precedence first
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
 %nonassoc BELOW_COMMA
+%right ';'
 %left ','
 %right '::'
 %nonassoc CONSTR_APPLICATION
@@ -281,6 +282,8 @@ Expr
   | Constr Expr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
   | BACKTICK TagName Expr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
   | ExprConsList %prec BELOW_COMMA  { ExprCons $1 }
+  | '[' ExprList ']'  { ExprCons $2 }
+  | '[|' ExprList '|]'  { ExprArray (init $2) }
 
 -- built as its own list (rather than by nesting `Expr ',' Expr`) so that
 -- `(a, b), c` and `a, (b, c)` stay distinguishable from `a, b, c`
@@ -291,6 +294,12 @@ ExprCommaList
 ExprConsList
   : Expr '::' Expr                       { [$1, $3] }
   | Expr '::' ExprConsList               { $1: $3 }
+
+ExprList
+  : Expr ';' ExprList  { $1 : $3 }
+  | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
+  | Expr               { [$1, ExprConstant ConstantList] }
+
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
 -- TODO: fill out this section

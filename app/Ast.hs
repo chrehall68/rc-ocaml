@@ -43,7 +43,12 @@ data Expr
   | -- `Tagname expr would give (ExprNonconstantPolymorphicVariant "Tagname" expr)
     ExprNonconstantPolymorphicVariant String Expr
   | ExprTuple [Expr]
-  | ExprCons [Expr]
+  | -- the expressions are in order of appearance (left to right)
+    -- utop evaluates the expression from right to left, but technically
+    -- the manual says the order is unspecified; same applies to lists (which is why
+    -- we represent them as ExprCons too)
+    ExprCons [Expr]
+  | ExprArray [Expr]
   deriving (Show)
 
 data DefinitionOrExpr
