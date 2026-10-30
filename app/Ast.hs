@@ -30,13 +30,25 @@ data Constant
   | ConstantUnit
   | ConstantList -- the empty list []
   | ConstantArray -- the empty array [||]
-  | ConstantPolymorphicVariant String -- ie `Tagname would give ConstantPolymorphicVariant "Tagname"
+  | ConstantPolymorphicVariant String -- `Tagname would give ConstantPolymorphicVariant "Tagname"
   | ConstantVariant Path -- constant variants are variants without arguments
+  deriving (Show)
+
+data Expr
+  = ExprConstant Constant
+  | -- refers to a (potentially module-qualified) name
+    ExprPath Path
+  | -- Path to the constructor, Expr
+    ExprNonconstantVariant Path Expr
+  | -- `Tagname expr would give (ExprNonconstantPolymorphicVariant "Tagname" expr)
+    ExprNonconstantPolymorphicVariant String Expr
+  | ExprTuple [Expr]
+  | ExprCons [Expr]
   deriving (Show)
 
 data DefinitionOrExpr
   = Definition
-  | Expr Constant
+  | Expr Expr
   deriving (Show)
 
 data ModuleItems = ModuleItems [DefinitionOrExpr]

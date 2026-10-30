@@ -11,6 +11,13 @@ import Data.Char
 %tokentype { Token }
 %error { parseError }
 
+-- lowest precedence first
+-- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
+%nonassoc BELOW_COMMA
+%left ','
+%right '::'
+%nonassoc CONSTR_APPLICATION
+
 %token
       -- literals and identifiers
       INT         { TokenInt $$ }
@@ -199,15 +206,15 @@ InstVarName     : LIDENT        { $1 }
 MethodName      : LIDENT        { $1 }
 
 -- referring to named objects
+-- ValuePath and Constr both start with a module path, so they share ModulePath
+-- and only diverge after the last `.` (LIDENT/operator => value, otherwise the
+-- final UIDENT of the path is the constructor)
 ValuePath
   : ValueName                   { Path Nothing $1 }
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
--- can't just use ModulePath here because
--- of ambiguity with ModuleName vs ConstrName since both start with UIDENT
 Constr
-  : ConstrName                  { Path Nothing $1 }
-  | ModuleName '.' Constr       { appendPath $1 $3 }
+  : ModulePath                  { constrOfPath $1 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -229,9 +236,9 @@ ClasstypePath
   : ClassName                               { ExtendedPath Nothing $1 }
   | ExtendedModulePath '.' ClassName        { ExtendedPath (Just $1) $3 }
 
-DotModuleName : '.' ModuleName { $2 }
 ModulePath
-  : ModuleName many(DotModuleName)                  { ModulePath ($1 : $2) }
+  : ModuleName                  { ModulePath [$1] }
+  | ModulePath '.' ModuleName   { appendModule $1 $3 }
 
 DotExtendedModuleName : '.' ExtendedModuleName { $2 }
 ExtendedModulePath
@@ -265,7 +272,25 @@ Constant
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- TODO: fill out this section
 Expr
-  : Constant                  { Expr $1 }
+  : Constant                  { ExprConstant $1 }
+  | ValuePath                  { ExprPath $1 }
+  | '(' Expr ')'               { $2 }
+  | BEGIN Expr END             { $2 }
+  -- TODO: (expr : typeexpr)
+  | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
+  | Constr Expr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
+  | BACKTICK TagName Expr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
+  | ExprConsList %prec BELOW_COMMA  { ExprCons $1 }
+
+-- built as its own list (rather than by nesting `Expr ',' Expr`) so that
+-- `(a, b), c` and `a, (b, c)` stay distinguishable from `a, b, c`
+ExprCommaList
+  : Expr ',' Expr               { [$3, $1] }
+  | ExprCommaList ',' Expr      { $3 : $1 }
+
+ExprConsList
+  : Expr '::' Expr                       { [$1, $3] }
+  | Expr '::' ExprConsList               { $1: $3 }
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
 -- TODO: fill out this section
@@ -287,17 +312,17 @@ ModuleItems
   : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
 
 ModuleItem
-  : Definition        { [$1] }
-  | ';;' Expr         { [$2] }
+  : Definition        { [Definition] }
+  | ';;' Expr         { [Expr $2] }
   | ';;'              { [] }
 
 DefinitionOrExpr 
-  : Definition        { $1 }
-  | Expr              { $1 }
+  : Definition        { Definition }
+  | Expr              { Expr $1 }
 
 -- TODO: use actual definitions
 Definition 
-  : LET                  { Definition }
+  : LET                  {  }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
@@ -319,10 +344,15 @@ type ParseResult a = Either String a
 parseError :: [Token] -> ParseResult a
 parseError t = Left ("Parse error on " ++ (show t))
 
-appendPath :: String -> Path -> Path
-appendPath prefix (Path maybePath name) = case maybePath of 
-  Nothing -> Path (Just (ModulePath [prefix])) name;
-  Just (ModulePath path) -> Path (Just (ModulePath (prefix : path))) name
+appendModule :: ModulePath -> String -> ModulePath
+appendModule (ModulePath ms) m = ModulePath (ms ++ [m])
+
+-- A.B.C -> the constructor C qualified by A.B
+constrOfPath :: ModulePath -> Path
+constrOfPath (ModulePath ms) = case reverse ms of
+  [c] -> Path Nothing c
+  c : rest -> Path (Just (ModulePath (reverse rest))) c
+  [] -> error "empty module path"
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])
