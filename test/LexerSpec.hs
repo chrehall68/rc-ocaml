@@ -148,21 +148,37 @@ spec = do
       ["<=", ">=", "+=", "|>", "<|", "**", "@@", "^^", "==", "<>", "+.", "*.", "->>", "<--", "&&&", "|||", "#+", "$", "%", "/", "@", "^", "-->"]
       $ \text ->
         it ("lexes " ++ text ++ " as a single infix symbol") $
-          alexScanTokens text `shouldBe` Right [TokenInfix text]
+          alexScanTokens text `shouldBe` Right [infixToken text]
     it "does not confuse infix symbols with the keyword symbols they start with" $ do
-      alexScanTokens "|| |||" `shouldBe` Right [TokenPipePipe, TokenInfix "|||"]
-      alexScanTokens "& &&&" `shouldBe` Right [TokenAmpersand, TokenInfix "&&&"]
-      alexScanTokens "- -> ->>" `shouldBe` Right [TokenMinus, TokenArrow, TokenInfix "->>"]
-      alexScanTokens "= ==" `shouldBe` Right [TokenEq, TokenInfix "=="]
+      alexScanTokens "|| |||" `shouldBe` Right [TokenPipePipe, TokenInfix0 "|||"]
+      alexScanTokens "& &&&" `shouldBe` Right [TokenAmpersand, TokenInfix0 "&&&"]
+      alexScanTokens "- -> ->>" `shouldBe` Right [TokenMinus, TokenArrow, TokenInfix2 "->>"]
+      alexScanTokens "= ==" `shouldBe` Right [TokenEq, TokenInfix0 "=="]
+    it "classifies infix symbols by precedence level" $ do
+      alexScanTokens "<= |> @@ ^^ +. ->> *. / % ** **. #+"
+        `shouldBe` Right
+          [ TokenInfix0 "<=",
+            TokenInfix0 "|>",
+            TokenInfix1 "@@",
+            TokenInfix1 "^^",
+            TokenInfix2 "+.",
+            TokenInfix2 "->>",
+            TokenInfix3 "*.",
+            TokenInfix3 "/",
+            TokenInfix3 "%",
+            TokenInfix4 "**",
+            TokenInfix4 "**.",
+            TokenHashOp "#+"
+          ]
     it "splits infix symbols at whitespace" $
       alexScanTokens "< =" `shouldBe` Right [TokenLt, TokenEq]
     it "lexes infix symbols between operands without spaces" $
       alexScanTokens "a<=b"
         `shouldBe` Right
-          [TokenLowercaseIdentifier "a", TokenInfix "<=", TokenLowercaseIdentifier "b"]
+          [TokenLowercaseIdentifier "a", TokenInfix0 "<=", TokenLowercaseIdentifier "b"]
     it "lets a leading # start an infix symbol only when operator characters follow" $ do
       alexScanTokens "#x" `shouldBe` Right [TokenHash, TokenLowercaseIdentifier "x"]
-      alexScanTokens "#<" `shouldBe` Right [TokenInfix "#<"]
+      alexScanTokens "#<" `shouldBe` Right [TokenHashOp "#<"]
 
   describe "prefix symbols" $ do
     forM_ ["!", "!!", "!==", "!+", "?+", "?!", "~+", "~~"] $ \text ->

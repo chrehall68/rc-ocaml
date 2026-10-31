@@ -33,6 +33,9 @@ qualifiedVar modules name = ExprPath (Path (Just (ModulePath modules)) name)
 variant :: String -> Expr
 variant name = ExprConstant (ConstantVariant (Path Nothing name))
 
+infixE :: String -> Expr -> Expr -> Expr
+infixE = ExprInfix
+
 int :: Int -> Expr
 int v = ExprConstant (ConstantInt (IntLiteral {value = v, representation = Unspecified}))
 
@@ -152,6 +155,105 @@ spec = do
         `shouldBe` Right (ExprCons [ExprFunctionApplication (var "f") [UnlabeledArgument (var "a")], var "b"])
     it "can't be the application of a bare constructor" $
       expr "C 1" `shouldBe` Right (ExprNonconstantVariant (Path Nothing "C") (int 1))
+
+  describe "infix operators" $ do
+    let a = var "a"
+        b = var "b"
+        c = var "c"
+    it "parses a single operator from each class" $ do
+      expr "a <= b" `shouldBe` Right (infixE "<=" a b)
+      expr "a @ b" `shouldBe` Right (infixE "@" a b)
+      expr "a +. b" `shouldBe` Right (infixE "+." a b)
+      expr "a /. b" `shouldBe` Right (infixE "/." a b)
+      expr "a ** b" `shouldBe` Right (infixE "**" a b)
+      expr "a #+ b" `shouldBe` Right (infixE "#+" a b)
+    it "parses operators that have their own tokens" $ do
+      expr "a = b" `shouldBe` Right (infixE "=" a b)
+      expr "a != b" `shouldBe` Right (infixE "!=" a b)
+      expr "a && b" `shouldBe` Right (infixE "&&" a b)
+      expr "a || b" `shouldBe` Right (infixE "||" a b)
+      expr "a := b" `shouldBe` Right (infixE ":=" a b)
+    it "parses keyword operators" $ do
+      expr "a mod b" `shouldBe` Right (infixE "mod" a b)
+      expr "a lsl b" `shouldBe` Right (infixE "lsl" a b)
+      expr "a or b" `shouldBe` Right (infixE "or" a b)
+    it "makes * bind tighter than +" $
+      expr "a + b * c" `shouldBe` Right (infixE "+" a (infixE "*" b c))
+    it "makes + bind looser than a custom * operator" $
+      expr "a *. b +. c" `shouldBe` Right (infixE "+." (infixE "*." a b) c)
+    it "treats operators of the same class as one level" $
+      expr "a + b -. c" `shouldBe` Right (infixE "-." (infixE "+" a b) c)
+    it "treats keyword operators as part of their class" $
+      expr "a * b mod c" `shouldBe` Right (infixE "mod" (infixE "*" a b) c)
+    it "associates + to the left" $
+      expr "a + b + c" `shouldBe` Right (infixE "+" (infixE "+" a b) c)
+    it "associates ** to the right" $
+      expr "a ** b ** c" `shouldBe` Right (infixE "**" a (infixE "**" b c))
+    it "associates @ to the right" $
+      expr "a @ b @ c" `shouldBe` Right (infixE "@" a (infixE "@" b c))
+    it "associates = to the left" $
+      expr "a = b = c" `shouldBe` Right (infixE "=" (infixE "=" a b) c)
+    it "associates && to the right" $
+      expr "a && b && c" `shouldBe` Right (infixE "&&" a (infixE "&&" b c))
+    it "associates := to the right" $
+      expr "a := b := c" `shouldBe` Right (infixE ":=" a (infixE ":=" b c))
+    it "binds + tighter than ::" $
+      expr "a + b :: c" `shouldBe` Right (ExprCons [infixE "+" a b, c])
+    it "binds :: tighter than @" $
+      expr "a :: b @ c" `shouldBe` Right (infixE "@" (ExprCons [a, b]) c)
+    it "binds @ tighter than =" $
+      expr "a @ b = c" `shouldBe` Right (infixE "=" (infixE "@" a b) c)
+    it "binds = tighter than &&" $
+      expr "a = b && c" `shouldBe` Right (infixE "&&" (infixE "=" a b) c)
+    it "binds && tighter than ||" $
+      expr "a || b && c" `shouldBe` Right (infixE "||" a (infixE "&&" b c))
+    it "binds || tighter than ," $
+      expr "a || b, c" `shouldBe` Right (ExprTuple [infixE "||" a b, c])
+    it "binds , tighter than :=" $
+      expr "a := b, c" `shouldBe` Right (infixE ":=" a (ExprTuple [b, c]))
+    it "binds function application tighter than operators" $
+      expr "f a + g b"
+        `shouldBe` Right
+          ( infixE
+              "+"
+              (ExprFunctionApplication (var "f") [UnlabeledArgument a])
+              (ExprFunctionApplication (var "g") [UnlabeledArgument b])
+          )
+    it "binds constructor application tighter than operators" $
+      expr "C a + b"
+        `shouldBe` Right (infixE "+" (ExprNonconstantVariant (Path Nothing "C") a) b)
+    it "lets parentheses override precedence" $
+      expr "(a + b) * c" `shouldBe` Right (infixE "*" (infixE "+" a b) c)
+
+  describe "prefix operators" $ do
+    let a = var "a"
+        b = var "b"
+    it "parses prefix symbols" $
+      expr "!a" `shouldBe` Right (ExprPrefix "!" a)
+    it "parses negation" $ do
+      expr "-a" `shouldBe` Right (ExprPrefix "-" a)
+      expr "-.a" `shouldBe` Right (ExprPrefix "-." a)
+    it "binds negation tighter than binary operators" $
+      expr "-a + b" `shouldBe` Right (infixE "+" (ExprPrefix "-" a) b)
+    it "tells binary and unary minus apart" $
+      expr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix "-" b))
+    it "applies negation to a whole function application" $
+      expr "-f a"
+        `shouldBe` Right (ExprPrefix "-" (ExprFunctionApplication (var "f") [UnlabeledArgument a]))
+    it "binds prefix symbols tighter than negation" $
+      expr "- !a" `shouldBe` Right (ExprPrefix "-" (ExprPrefix "!" a))
+    it "binds prefix symbols tighter than application" $
+      expr "!f x"
+        `shouldBe` Right (ExprFunctionApplication (ExprPrefix "!" (var "f")) [UnlabeledArgument (var "x")])
+    it "allows prefix applications as arguments" $
+      expr "f !a b"
+        `shouldBe` Right
+          (ExprFunctionApplication (var "f") [UnlabeledArgument (ExprPrefix "!" a), UnlabeledArgument b])
+    it "applies a prefix symbol to a parenthesized expression" $
+      expr "!(f x)"
+        `shouldBe` Right (ExprPrefix "!" (ExprFunctionApplication (var "f") [UnlabeledArgument (var "x")]))
+    it "mixes with other operators" $
+      expr "!a + !b" `shouldBe` Right (infixE "+" (ExprPrefix "!" a) (ExprPrefix "!" b))
 
   describe "tuples" $ do
     it "parses a flat tuple" $

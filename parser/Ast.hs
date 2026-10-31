@@ -65,6 +65,10 @@ data Expr
   | -- source record, changed fields
     ExprRecord (Maybe Expr) [RecordField]
   | ExprFunctionApplication Expr [Argument]
+  | -- operator, right expression
+    ExprPrefix String Expr
+  | -- operator, left expression, right expression
+    ExprInfix String Expr Expr
   deriving (Show, Eq)
 
 data DefinitionOrExpr
