@@ -1,4 +1,4 @@
-module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
+module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), infixToken, decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
 
 import Data.Char
 import Numeric
@@ -25,7 +25,15 @@ data Token
   | TokenString String -- string is the contents of the string, without quotes/delimiters
   | TokenLabel String -- string is just the label name
   | TokenOptionalLabel String -- string is just the label name
-  | TokenInfix String
+  | -- infix symbols are split by precedence class (see infixToken); the string is the full operator
+    TokenInfix0 String -- =... <... >... |... &... $...
+  | TokenInfix1 String -- @... ^...
+  | TokenInfix2 String -- +... -...
+  | TokenInfix3 String
+  | -- \*... /... %...
+    TokenInfix4 String
+  | -- \**...
+    TokenHashOp String -- #...
   | TokenPrefix String
   | -- keywords
     TokenAnd
@@ -130,6 +138,19 @@ data Token
   | TokenTilde
   | TokenEOF
   deriving (Show, Eq)
+
+-- classifies an infix symbol by its precedence level, as in
+-- https://ocaml.org/manual/5.3/expr.html#ss:precedence-and-associativity
+-- this makes the parser's job of assigning precedence possible
+infixToken :: String -> Token
+infixToken s = case s of
+  '#' : _ -> TokenHashOp s
+  '*' : '*' : _ -> TokenInfix4 s
+  c : _
+    | c `elem` "*/%" -> TokenInfix3 s
+    | c `elem` "+-" -> TokenInfix2 s
+    | c `elem` "@^" -> TokenInfix1 s
+  _ -> TokenInfix0 s
 
 removeUnderscore :: String -> String
 removeUnderscore s = filter (/= '_') s

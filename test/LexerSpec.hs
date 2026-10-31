@@ -20,23 +20,25 @@ spec = do
       alexScanTokens "letter" `shouldBe` Right [TokenLowercaseIdentifier "letter"]
 
     it "lexes identifiers" $
-      alexScanTokens "foo Bar x' y_1" `shouldBe` Right
-        [ TokenLowercaseIdentifier "foo",
-          TokenCapitalizedIdentifier "Bar",
-          TokenLowercaseIdentifier "x'",
-          TokenLowercaseIdentifier "y_1"
-        ]
+      alexScanTokens "foo Bar x' y_1"
+        `shouldBe` Right
+          [ TokenLowercaseIdentifier "foo",
+            TokenCapitalizedIdentifier "Bar",
+            TokenLowercaseIdentifier "x'",
+            TokenLowercaseIdentifier "y_1"
+          ]
     it "lexes a lone underscore as the wildcard" $
       alexScanTokens "_ _a" `shouldBe` Right [TokenUnderscore, TokenLowercaseIdentifier "_a"]
 
     it "lexes integer literals" $
-      alexScanTokens "1 0xff 0o7 0b1 1_0" `shouldBe` Right
-        [ int 1 Unspecified,
-          int 255 Unspecified,
-          int 7 Unspecified,
-          int 1 Unspecified,
-          int 10 Unspecified
-        ]
+      alexScanTokens "1 0xff 0o7 0b1 1_0"
+        `shouldBe` Right
+          [ int 1 Unspecified,
+            int 255 Unspecified,
+            int 7 Unspecified,
+            int 1 Unspecified,
+            int 10 Unspecified
+          ]
     it "lexes suffixed integer literals" $
       alexScanTokens "5l 5L 5n" `shouldBe` Right [int 5 Int32, int 5 Int64, int 5 NativeInt]
 
@@ -58,63 +60,125 @@ spec = do
       alexScanTokens "{|abc" `shouldSatisfy` isLeft
 
     it "lexes single-character symbols" $
-      alexScanTokens "+ * ( ) , ;" `shouldBe` Right
-        [TokenPlus, TokenStar, TokenLParen, TokenRParen, TokenComma, TokenSemi]
+      alexScanTokens "+ * ( ) , ;"
+        `shouldBe` Right
+          [TokenPlus, TokenStar, TokenLParen, TokenRParen, TokenComma, TokenSemi]
     it "uses the longest match for multi-character symbols" $
-      alexScanTokens ":: := :> -> -. <- ;; != && || [| |] .. .~" `shouldBe` Right
-        [ TokenColonColon, TokenColonEq, TokenColonGt, TokenArrow, TokenMinusDot,
-          TokenLeftArrow, TokenSemiSemi, TokenPhysicalNE, TokenAmpersandAmpersand,
-          TokenPipePipe, TokenLBracketPipe, TokenPipeRBracket, TokenDotDot, TokenDotTilde
-        ]
+      alexScanTokens ":: := :> -> -. <- ;; != && || [| |] .. .~"
+        `shouldBe` Right
+          [ TokenColonColon,
+            TokenColonEq,
+            TokenColonGt,
+            TokenArrow,
+            TokenMinusDot,
+            TokenLeftArrow,
+            TokenSemiSemi,
+            TokenPhysicalNE,
+            TokenAmpersandAmpersand,
+            TokenPipePipe,
+            TokenLBracketPipe,
+            TokenPipeRBracket,
+            TokenDotDot,
+            TokenDotTilde
+          ]
 
     it "lexes a small expression" $
-      alexScanTokens "let x = 1 in x + 2" `shouldBe` Right
-        [ TokenLet, TokenLowercaseIdentifier "x", TokenEq, int 1 Unspecified, TokenIn,
-          TokenLowercaseIdentifier "x", TokenPlus, int 2 Unspecified
-        ]
+      alexScanTokens "let x = 1 in x + 2"
+        `shouldBe` Right
+          [ TokenLet,
+            TokenLowercaseIdentifier "x",
+            TokenEq,
+            int 1 Unspecified,
+            TokenIn,
+            TokenLowercaseIdentifier "x",
+            TokenPlus,
+            int 2 Unspecified
+          ]
 
     it "reports a lexical error with its position" $
       alexScanTokens "let \x01" `shouldSatisfy` isLeft
   describe "keyword symbols" $ do
     forM_
-      [ ("!=", TokenPhysicalNE), ("&", TokenAmpersand), ("&&", TokenAmpersandAmpersand),
-        ("*", TokenStar), ("+", TokenPlus), ("-", TokenMinus), ("-.", TokenMinusDot),
-        ("->", TokenArrow), (".", TokenDot), ("..", TokenDotDot), (".~", TokenDotTilde),
-        (":", TokenColon), ("::", TokenColonColon), (":=", TokenColonEq), (":>", TokenColonGt),
-        (";", TokenSemi), (";;", TokenSemiSemi), ("<", TokenLt), ("<-", TokenLeftArrow),
-        ("=", TokenEq), (">", TokenGt), ("?", TokenQuestion), ("|", TokenPipe),
-        ("||", TokenPipePipe), ("~", TokenTilde), ("#", TokenHash)
+      [ ("!=", TokenPhysicalNE),
+        ("&", TokenAmpersand),
+        ("&&", TokenAmpersandAmpersand),
+        ("*", TokenStar),
+        ("+", TokenPlus),
+        ("-", TokenMinus),
+        ("-.", TokenMinusDot),
+        ("->", TokenArrow),
+        (".", TokenDot),
+        ("..", TokenDotDot),
+        (".~", TokenDotTilde),
+        (":", TokenColon),
+        ("::", TokenColonColon),
+        (":=", TokenColonEq),
+        (":>", TokenColonGt),
+        (";", TokenSemi),
+        (";;", TokenSemiSemi),
+        ("<", TokenLt),
+        ("<-", TokenLeftArrow),
+        ("=", TokenEq),
+        (">", TokenGt),
+        ("?", TokenQuestion),
+        ("|", TokenPipe),
+        ("||", TokenPipePipe),
+        ("~", TokenTilde),
+        ("#", TokenHash)
       ]
       $ \(text, token) ->
         it ("lexes " ++ text ++ " as a keyword symbol") $
           alexScanTokens text `shouldBe` Right [token]
     it "keeps keyword symbols apart from their neighbours when spaced" $
-      alexScanTokens "x := y -> z" `shouldBe` Right
-        [ TokenLowercaseIdentifier "x", TokenColonEq, TokenLowercaseIdentifier "y",
-          TokenArrow, TokenLowercaseIdentifier "z" ]
+      alexScanTokens "x := y -> z"
+        `shouldBe` Right
+          [ TokenLowercaseIdentifier "x",
+            TokenColonEq,
+            TokenLowercaseIdentifier "y",
+            TokenArrow,
+            TokenLowercaseIdentifier "z"
+          ]
     it "lexes a keyword symbol directly against identifiers" $
-      alexScanTokens "a<-b" `shouldBe` Right
-        [TokenLowercaseIdentifier "a", TokenLeftArrow, TokenLowercaseIdentifier "b"]
+      alexScanTokens "a<-b"
+        `shouldBe` Right
+          [TokenLowercaseIdentifier "a", TokenLeftArrow, TokenLowercaseIdentifier "b"]
 
   describe "infix symbols" $ do
     forM_
       ["<=", ">=", "+=", "|>", "<|", "**", "@@", "^^", "==", "<>", "+.", "*.", "->>", "<--", "&&&", "|||", "#+", "$", "%", "/", "@", "^", "-->"]
       $ \text ->
         it ("lexes " ++ text ++ " as a single infix symbol") $
-          alexScanTokens text `shouldBe` Right [TokenInfix text]
+          alexScanTokens text `shouldBe` Right [infixToken text]
     it "does not confuse infix symbols with the keyword symbols they start with" $ do
-      alexScanTokens "|| |||" `shouldBe` Right [TokenPipePipe, TokenInfix "|||"]
-      alexScanTokens "& &&&" `shouldBe` Right [TokenAmpersand, TokenInfix "&&&"]
-      alexScanTokens "- -> ->>" `shouldBe` Right [TokenMinus, TokenArrow, TokenInfix "->>"]
-      alexScanTokens "= ==" `shouldBe` Right [TokenEq, TokenInfix "=="]
+      alexScanTokens "|| |||" `shouldBe` Right [TokenPipePipe, TokenInfix0 "|||"]
+      alexScanTokens "& &&&" `shouldBe` Right [TokenAmpersand, TokenInfix0 "&&&"]
+      alexScanTokens "- -> ->>" `shouldBe` Right [TokenMinus, TokenArrow, TokenInfix2 "->>"]
+      alexScanTokens "= ==" `shouldBe` Right [TokenEq, TokenInfix0 "=="]
+    it "classifies infix symbols by precedence level" $ do
+      alexScanTokens "<= |> @@ ^^ +. ->> *. / % ** **. #+"
+        `shouldBe` Right
+          [ TokenInfix0 "<=",
+            TokenInfix0 "|>",
+            TokenInfix1 "@@",
+            TokenInfix1 "^^",
+            TokenInfix2 "+.",
+            TokenInfix2 "->>",
+            TokenInfix3 "*.",
+            TokenInfix3 "/",
+            TokenInfix3 "%",
+            TokenInfix4 "**",
+            TokenInfix4 "**.",
+            TokenHashOp "#+"
+          ]
     it "splits infix symbols at whitespace" $
       alexScanTokens "< =" `shouldBe` Right [TokenLt, TokenEq]
     it "lexes infix symbols between operands without spaces" $
-      alexScanTokens "a<=b" `shouldBe` Right
-        [TokenLowercaseIdentifier "a", TokenInfix "<=", TokenLowercaseIdentifier "b"]
+      alexScanTokens "a<=b"
+        `shouldBe` Right
+          [TokenLowercaseIdentifier "a", TokenInfix0 "<=", TokenLowercaseIdentifier "b"]
     it "lets a leading # start an infix symbol only when operator characters follow" $ do
       alexScanTokens "#x" `shouldBe` Right [TokenHash, TokenLowercaseIdentifier "x"]
-      alexScanTokens "#<" `shouldBe` Right [TokenInfix "#<"]
+      alexScanTokens "#<" `shouldBe` Right [TokenHashOp "#<"]
 
   describe "prefix symbols" $ do
     forM_ ["!", "!!", "!==", "!+", "?+", "?!", "~+", "~~"] $ \text ->
@@ -123,8 +187,9 @@ spec = do
     it "lexes a dereference" $
       alexScanTokens "!x" `shouldBe` Right [TokenPrefix "!", TokenLowercaseIdentifier "x"]
     it "prefers != over the prefix symbol" $
-      alexScanTokens "a != b" `shouldBe` Right
-        [TokenLowercaseIdentifier "a", TokenPhysicalNE, TokenLowercaseIdentifier "b"]
+      alexScanTokens "a != b"
+        `shouldBe` Right
+          [TokenLowercaseIdentifier "a", TokenPhysicalNE, TokenLowercaseIdentifier "b"]
     it "leaves a lone ? or ~ before an identifier as a keyword symbol" $ do
       alexScanTokens "?x" `shouldBe` Right [TokenQuestion, TokenLowercaseIdentifier "x"]
       alexScanTokens "~x" `shouldBe` Right [TokenTilde, TokenLowercaseIdentifier "x"]
@@ -132,9 +197,15 @@ spec = do
       alexScanTokens "~x:" `shouldBe` Right [TokenLabel "x"]
       alexScanTokens "?x:" `shouldBe` Right [TokenOptionalLabel "x"]
     it "mixes prefix and infix symbols" $
-      alexScanTokens "x := !y + 1" `shouldBe` Right
-        [ TokenLowercaseIdentifier "x", TokenColonEq, TokenPrefix "!",
-          TokenLowercaseIdentifier "y", TokenPlus, int 1 Unspecified ]
+      alexScanTokens "x := !y + 1"
+        `shouldBe` Right
+          [ TokenLowercaseIdentifier "x",
+            TokenColonEq,
+            TokenPrefix "!",
+            TokenLowercaseIdentifier "y",
+            TokenPlus,
+            int 1 Unspecified
+          ]
 
   describe "whitespace" $ do
     it "skips every kind of ASCII whitespace" $
@@ -152,16 +223,17 @@ spec = do
     it "keeps whitespace inside strings" $
       alexScanTokens "\"  \t \"" `shouldBe` Right [TokenString "  \t "]
     it "counts lines in error positions" $ do
-      alexScanTokens "x\n\x01" `shouldBe` Left "lexical error at line 2, column 1"
-      alexScanTokens "x\n\ny \x01" `shouldBe` Left "lexical error at line 3, column 3"
+      alexScanTokens "x\n\x01" `shouldBe` Left "Unexpected token at line 2, column 1"
+      alexScanTokens "x\n\ny \x01" `shouldBe` Left "Unexpected token at line 3, column 3"
     it "rejects unicode whitespace outside strings, like OCaml" $ do
       alexScanTokens "x\x00a0y" `shouldSatisfy` isLeft
       alexScanTokens "let\x2003x" `shouldSatisfy` isLeft
 
   describe "unicode" $ do
     it "lexes latin-1 letters in identifiers" $ do
-      alexScanTokens "é ñandú" `shouldBe` Right
-        [TokenLowercaseIdentifier "é", TokenLowercaseIdentifier "ñandú"]
+      alexScanTokens "é ñandú"
+        `shouldBe` Right
+          [TokenLowercaseIdentifier "é", TokenLowercaseIdentifier "ñandú"]
       alexScanTokens "École" `shouldBe` Right [TokenCapitalizedIdentifier "École"]
     it "accepts any unicode inside quoted strings" $
       alexScanTokens "\"é日本😀\"" `shouldBe` Right [TokenString "é日本😀"]
@@ -176,7 +248,7 @@ spec = do
       alexScanTokens "λ" `shouldSatisfy` isLeft
       alexScanTokens "日本" `shouldSatisfy` isLeft
     it "tracks columns in characters, not bytes" $
-      alexScanTokens "é \x01" `shouldBe` Left "lexical error at line 1, column 3"
+      alexScanTokens "é \x01" `shouldBe` Left "Unexpected token at line 1, column 3"
   where
     isLeft (Left _) = True
     isLeft _ = False

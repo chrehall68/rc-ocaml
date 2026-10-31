@@ -177,7 +177,7 @@ tokens :-
     \~ @lowercaseIdent \:               { regularToken (\s -> TokenLabel (tail . init $ s)) }
     \? @lowercaseIdent \:               { regularToken (\s -> TokenOptionalLabel (tail . init $ s)) }
     -- prefix/infix operators
-    @infixSymbol                        { regularToken (\s -> TokenInfix s) }
+    @infixSymbol                        { regularToken infixToken }
     @prefixSymbol                       { regularToken (\s -> TokenPrefix s) }
   }
   -- the rest of the machinery for recognizing strings

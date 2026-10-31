@@ -42,7 +42,7 @@ extra-doc-files: CHANGELOG.md
 common warnings
   ghc-options: -Wall
 
-library rc-ocaml-lexer
+library
   -- Import common warning flags.
   import: warnings
   -- LANGUAGE extensions used by modules in this package.
@@ -53,14 +53,17 @@ library rc-ocaml-lexer
     base ^>=4.20.2.0,
 
   exposed-modules:
+    Ast
     Lexer
+    MyParser
     Tokens
 
   build-tool-depends:
-    alex:alex
+    alex:alex,
+    happy:happy,
 
   -- Directories containing source files.
-  hs-source-dirs: lexer
+  hs-source-dirs: lexer, parser
   -- Base language which the package is written in.
   default-language: Haskell2010
 
@@ -69,24 +72,15 @@ executable rc-ocaml
   import: warnings
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
-  -- Modules included in this executable, other than Main.
-  other-modules:
-    Ast
-    MyParser
-
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    array,
     base ^>=4.20.2.0,
-    rc-ocaml-lexer,
-
-  build-tool-depends:
-    happy:happy
+    rc-ocaml,
 
   -- Directories containing source files.
-  hs-source-dirs: app
+  hs-source-dirs: exe
   -- Base language which the package is written in.
   default-language: Haskell2010
 
@@ -96,12 +90,13 @@ test-suite rc-ocaml-test
   main-is: Spec.hs
   other-modules:
     LexerSpec
+    ParserSpec
     TokensSpec
 
   build-depends:
     base ^>=4.20.2.0,
     hspec,
-    rc-ocaml-lexer,
+    rc-ocaml,
 
   build-tool-depends:
     hspec-discover:hspec-discover

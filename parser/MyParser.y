@@ -11,6 +11,24 @@ import Data.Char
 %tokentype { Token }
 %error { parseError }
 
+-- lowest precedence first
+-- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
+%nonassoc BELOW_COMMA
+%right ';'
+%right ':='
+%left ','
+%right PREC_OR OR '||'
+%right PREC_AND '&' '&&'
+%left PREC_INFIX0 INFIXOP0 '=' '<' '>' '!='
+%right PREC_INFIX1 INFIXOP1
+%right '::'
+%left PREC_INFIX2 INFIXOP2 '+' '-' '-.'
+%left PREC_INFIX3 INFIXOP3 '*' MOD LAND LOR LXOR
+%right PREC_INFIX4 INFIXOP4 LSL LSR ASR
+%nonassoc NEGATE_OP -- for prefix negation
+%nonassoc CONSTR_APPLICATION -- for constructors, polymorphic variants, and function applications
+%left HASHOP
+
 %token
       -- literals and identifiers
       INT         { TokenInt $$ }
@@ -21,7 +39,12 @@ import Data.Char
       OPTLABEL    { TokenOptionalLabel $$ }
       UIDENT      { TokenCapitalizedIdentifier $$ }
       LIDENT      { TokenLowercaseIdentifier $$ }
-      INFIX       { TokenInfix $$ }
+      INFIXOP0    { TokenInfix0 $$ }
+      INFIXOP1    { TokenInfix1 $$ }
+      INFIXOP2    { TokenInfix2 $$ }
+      INFIXOP3    { TokenInfix3 $$ }
+      INFIXOP4    { TokenInfix4 $$ }
+      HASHOP      { TokenHashOp $$ }
       PREFIX      { TokenPrefix $$ }
 
       -- keywords
@@ -164,25 +187,54 @@ OperatorName
   : PREFIX                      { $1 }
   | InfixOp                     { $1 }
 
+-- infix operators, grouped by precedence level (see precedence table at
+-- the top, and https://ocaml.org/manual/5.3/expr.html#ss:precedence-and-associativity).
+-- Each level is its own nonterminal so that expressions can give each level a precedence
 InfixOp
-  : INFIX                       { $1 }
-  | '*'                         { "*" }
-  | '+'                         { "+" }
-  | '-'                         { "-" }
-  | '-.'                        { "-." }
+  : InfixOpOr                   { $1 }
+  | InfixOpAnd                  { $1 }
+  | InfixOp0                    { $1 }
+  | InfixOp1                    { $1 }
+  | InfixOp2                    { $1 }
+  | InfixOp3                    { $1 }
+  | InfixOp4                    { $1 }
+  | ':='                        { ":=" }
+  | HASHOP                      { $1 }
+
+InfixOpOr
+  : OR                          { "or" }
+  | '||'                        { "||" }
+
+InfixOpAnd
+  : '&'                         { "&" }
+  | '&&'                        { "&&" }
+
+InfixOp0
+  : INFIXOP0                    { $1 }
   | '='                         { "=" }
   | '!='                        { "!=" }
   | '<'                         { "<" }
   | '>'                         { ">" }
-  | OR                          { "or" }
-  | '||'                        { "||" }
-  | '&'                         { "&" }
-  | '&&'                        { "&&" }
-  | ':='                        { ":=" }
+
+InfixOp1
+  : INFIXOP1                    { $1 }
+
+InfixOp2
+  : INFIXOP2                    { $1 }
+  | '+'                         { "+" }
+  | '-'                         { "-" }
+  | '-.'                        { "-." }
+
+InfixOp3
+  : INFIXOP3                    { $1 }
+  | '*'                         { "*" }
   | MOD                         { "mod" }
   | LAND                        { "land" }
   | LOR                         { "lor" }
   | LXOR                        { "lxor" }
+
+InfixOp4
+  : INFIXOP4                    { $1 }
   | LSL                         { "lsl" }
   | LSR                         { "lsr" }
   | ASR                         { "asr" }
@@ -199,15 +251,15 @@ InstVarName     : LIDENT        { $1 }
 MethodName      : LIDENT        { $1 }
 
 -- referring to named objects
+-- ValuePath and Constr both start with a module path, so they share ModulePath
+-- and only diverge after the last `.` (LIDENT/operator => value, otherwise the
+-- final UIDENT of the path is the constructor)
 ValuePath
   : ValueName                   { Path Nothing $1 }
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
--- can't just use ModulePath here because
--- of ambiguity with ModuleName vs ConstrName since both start with UIDENT
 Constr
-  : ConstrName                  { Path Nothing $1 }
-  | ModuleName '.' Constr       { appendPath $1 $3 }
+  : ModulePath                  { constrOfPath $1 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -229,9 +281,9 @@ ClasstypePath
   : ClassName                               { ExtendedPath Nothing $1 }
   | ExtendedModulePath '.' ClassName        { ExtendedPath (Just $1) $3 }
 
-DotModuleName : '.' ModuleName { $2 }
 ModulePath
-  : ModuleName many(DotModuleName)                  { ModulePath ($1 : $2) }
+  : ModuleName                  { ModulePath [$1] }
+  | ModulePath '.' ModuleName   { appendModule $1 $3 }
 
 DotExtendedModuleName : '.' ExtendedModuleName { $2 }
 ExtendedModulePath
@@ -245,7 +297,14 @@ ExtendedModuleName
 -- TODO: fill out this section
 
 -- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
-Constant 
+-- had to break this up into multiple rules to avoid ambiguity
+Constant
+  : LiteralConstant      { $1 }
+  | BACKTICK TagName     { ConstantPolymorphicVariant $2 }
+  | Constr               { ConstantVariant $1 }
+
+-- constants that can't be confused with constructor application
+LiteralConstant
   : INT                  { ConstantInt $1 }
   | DOUBLE               { ConstantDouble $1 }
   | CHAR                 { ConstantChar $1 }
@@ -256,16 +315,93 @@ Constant
   | BEGIN END            { ConstantUnit }
   | '[' ']'              { ConstantList }
   | '[|' '|]'            { ConstantArray }
-  | BACKTICK UIDENT      { ConstantPolymorphicVariant $2 }
-  | Constr               { ConstantVariant $1 }
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
+TypeExpr 
+  : {- empty -}             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
--- TODO: fill out this section
+-- To avoid ambiguity, we've broken expressions up into tiers:
+--   AtomExpr   - can be the head of a function application
+--   SimpleExpr - can be an argument (an atom, or a nullary constructor/tag)
+--   Expr       - everything else
+-- Arguments and constructor arguments are SimpleExprs, so that `f a b` can't
+-- be read as `f (a b)`, `(f a) b`, or `f a b`. Also, nullary constructors aren't atoms,
+-- so `C 1` can only be constructor application.
 Expr
-  : Constant                  { Expr $1 }
+  : SimpleExpr                { $1 }
+  | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
+  | Constr SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
+  | BACKTICK TagName SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
+  | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
+  -- function application
+  | AtomExpr many1(Argument)  { ExprFunctionApplication $1 $2 }
+  | '-' Expr %prec NEGATE_OP    { ExprPrefix "-" $2 }
+  | '-.' Expr %prec NEGATE_OP  { ExprPrefix "-." $2 }
+  -- infix operators; need to list them all out to get precendence right
+  | Expr ':=' Expr                       { ExprInfix ":=" $1 $3 }
+  | Expr InfixOpOr Expr  %prec PREC_OR   { ExprInfix $2 $1 $3 }
+  | Expr InfixOpAnd Expr %prec PREC_AND  { ExprInfix $2 $1 $3 }
+  | Expr InfixOp0 Expr   %prec PREC_INFIX0  { ExprInfix $2 $1 $3 }
+  | Expr InfixOp1 Expr   %prec PREC_INFIX1  { ExprInfix $2 $1 $3 }
+  | Expr InfixOp2 Expr   %prec PREC_INFIX2  { ExprInfix $2 $1 $3 }
+  | Expr InfixOp3 Expr   %prec PREC_INFIX3  { ExprInfix $2 $1 $3 }
+  | Expr InfixOp4 Expr   %prec PREC_INFIX4  { ExprInfix $2 $1 $3 }
+  | Expr HASHOP Expr                     { ExprInfix $2 $1 $3 }
+
+SimpleExpr
+  : AtomExpr                  { $1 }
+  | Constr                    { ExprConstant (ConstantVariant $1) }
+  | BACKTICK TagName          { ExprConstant (ConstantPolymorphicVariant $2) }
+
+AtomExpr
+  : LiteralConstant            { ExprConstant $1 }
+  -- putting prefix here ensures that we get `(!f) x` from `!f x`
+  | PREFIX SimpleExpr          { ExprPrefix $1 $2 }
+  | ValuePath                  { ExprPath $1 }
+  | '(' Expr ')'               { $2 }
+  | BEGIN Expr END             { $2 }
+  | '(' Expr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
+  | '[' ExprList ']'   { ExprCons $2 }
+  | '[|' ExprList '|]' { ExprArray (init $2) }
+  | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
+  -- since `=` is an infix operator, `{ x = e ... }` would be ambiguous with `{ (x = e) with ... }`
+  -- so we put this rule here instead
+  | '{' SimpleExpr WITH ExprFieldList '}'  { ExprRecord (Just $2) $4 }
+
+-- the resulting list is in reverse order of appearance in the tuple
+ExprCommaList
+  : Expr ',' Expr               { [$3, $1] }
+  | ExprCommaList ',' Expr      { $3 : $1 }
+
+ExprConsList
+  : Expr '::' Expr                       { [$1, $3] }
+  | Expr '::' ExprConsList               { $1: $3 }
+
+ExprList
+  : Expr ';' ExprList  { $1 : $3 }
+  | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
+  | Expr               { [$1, ExprConstant ConstantList] }
+
+RecordField
+  : Field          { RecordField $1 Nothing (ExprPath $1) }
+  | Field ':' TypeExpr { RecordField $1 (Just $3) (ExprPath $1) }
+  | Field '=' Expr     { RecordField $1 Nothing $3 }
+  | Field ':' TypeExpr '=' Expr { RecordField $1 (Just $3) $5 }
+ExprFieldList
+  : RecordField ';' ExprFieldList  { $1 : $3 }
+  | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
+  | RecordField                     { [$1] }
+
+-- LABEL/OPTLABEL already include the trailing `:` (`~x:`)
+Argument
+  : SimpleExpr           { UnlabeledArgument $1 }
+  | '~' LIDENT           { LabeledArgument $2 Nothing }
+  | LABEL SimpleExpr     { LabeledArgument $1 (Just $2) }
+  | '?' LIDENT           { OptionalArgument $2 Nothing }
+  | OPTLABEL SimpleExpr  { OptionalArgument $1 (Just $2) }
+
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
 -- TODO: fill out this section
@@ -287,17 +423,17 @@ ModuleItems
   : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
 
 ModuleItem
-  : Definition        { [$1] }
-  | ';;' Expr         { [$2] }
+  : Definition        { [Definition] }
+  | ';;' Expr         { [Expr $2] }
   | ';;'              { [] }
 
 DefinitionOrExpr 
-  : Definition        { $1 }
-  | Expr              { $1 }
+  : Definition        { Definition }
+  | Expr              { Expr $1 }
 
 -- TODO: use actual definitions
 Definition 
-  : LET                  { Definition }
+  : LET                  {  }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
@@ -319,10 +455,15 @@ type ParseResult a = Either String a
 parseError :: [Token] -> ParseResult a
 parseError t = Left ("Parse error on " ++ (show t))
 
-appendPath :: String -> Path -> Path
-appendPath prefix (Path maybePath name) = case maybePath of 
-  Nothing -> Path (Just (ModulePath [prefix])) name;
-  Just (ModulePath path) -> Path (Just (ModulePath (prefix : path))) name
+appendModule :: ModulePath -> String -> ModulePath
+appendModule (ModulePath ms) m = ModulePath (ms ++ [m])
+
+-- A.B.C -> the constructor C qualified by A.B
+constrOfPath :: ModulePath -> Path
+constrOfPath (ModulePath ms) = case reverse ms of
+  [c] -> Path Nothing c
+  c : rest -> Path (Just (ModulePath (reverse rest))) c
+  [] -> error "empty module path"
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])
