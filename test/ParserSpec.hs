@@ -255,6 +255,26 @@ spec = do
     it "mixes with other operators" $
       expr "!a + !b" `shouldBe` Right (infixE "+" (ExprPrefix "!" a) (ExprPrefix "!" b))
 
+  describe "field access and assignment" $ do
+    let a = var "a"
+        b = var "b"
+        c = var "c"
+        field name = Path Nothing name
+    it "parses field access" $
+      expr "a.f" `shouldBe` Right (ExprFieldAccess a (field "f"))
+    it "parses field assignment" $
+      expr "a.f <- b" `shouldBe` Right (ExprFieldAssignment a (field "f") b)
+    it "reads a module path before the dot as a path, not a constructor" $
+      expr "!M.x" `shouldBe` Right (ExprPrefix "!" (qualifiedVar ["M"] "x"))
+    it "binds a prefix symbol tighter than field access" $
+      expr "!a.f" `shouldBe` Right (ExprFieldAccess (ExprPrefix "!" a) (field "f"))
+    it "lets the assigned value be an operator expression" $
+      expr "a.f <- b + c" `shouldBe` Right (ExprFieldAssignment a (field "f") (infixE "+" b c))
+    it "lets the assigned value be a tuple" $
+      expr "a.f <- b, c" `shouldBe` Right (ExprFieldAssignment a (field "f") (ExprTuple [b, c]))
+    it "associates <- and := together to the right" $
+      expr "a.f <- b := c" `shouldBe` Right (ExprFieldAssignment a (field "f") (infixE ":=" b c))
+
   describe "tuples" $ do
     it "parses a flat tuple" $
       expr "a, b, c" `shouldBe` Right (ExprTuple [var "a", var "b", var "c"])

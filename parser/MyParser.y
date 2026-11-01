@@ -15,7 +15,7 @@ import Data.Char
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
 %nonassoc BELOW_COMMA
 %right ';'
-%right ':='
+%right ':=' '<-'
 %left ','
 %right PREC_OR OR '||'
 %right PREC_AND '&' '&&'
@@ -28,6 +28,8 @@ import Data.Char
 %nonassoc NEGATE_OP -- for prefix negation
 %nonassoc CONSTR_APPLICATION -- for constructors, polymorphic variants, and function applications
 %left HASHOP
+%nonassoc BELOW_DOT -- for module paths followed by a `.`
+%left '.'
 
 %token
       -- literals and identifiers
@@ -259,7 +261,7 @@ ValuePath
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
 Constr
-  : ModulePath                  { constrOfPath $1 }
+  : ModulePath %prec BELOW_DOT  { constrOfPath $1 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -349,6 +351,9 @@ Expr
   | Expr InfixOp3 Expr   %prec PREC_INFIX3  { ExprInfix $2 $1 $3 }
   | Expr InfixOp4 Expr   %prec PREC_INFIX4  { ExprInfix $2 $1 $3 }
   | Expr HASHOP Expr                     { ExprInfix $2 $1 $3 }
+  -- accessors for records, arrays, and bytestrings
+  | AtomExpr '.' Field              { ExprFieldAccess $1 $3 }
+  | AtomExpr '.' Field '<-' Expr    { ExprFieldAssignment $1 $3 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }

@@ -69,6 +69,8 @@ data Expr
     ExprPrefix String Expr
   | -- operator, left expression, right expression
     ExprInfix String Expr Expr
+  | ExprFieldAccess Expr Path
+  | ExprFieldAssignment Expr Path Expr
   deriving (Show, Eq)
 
 data DefinitionOrExpr
