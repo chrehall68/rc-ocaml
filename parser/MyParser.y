@@ -351,9 +351,13 @@ Expr
   | Expr InfixOp3 Expr   %prec PREC_INFIX3  { ExprInfix $2 $1 $3 }
   | Expr InfixOp4 Expr   %prec PREC_INFIX4  { ExprInfix $2 $1 $3 }
   | Expr HASHOP Expr                     { ExprInfix $2 $1 $3 }
-  -- accessors for records, arrays, and bytestrings
+  -- accessors for records, arrays, and strings
   | AtomExpr '.' Field              { ExprFieldAccess $1 $3 }
   | AtomExpr '.' Field '<-' Expr    { ExprFieldAssignment $1 $3 $5 }
+  | AtomExpr '.' '('Expr')'              { ExprArrayAccess $1 $4 }
+  | AtomExpr '.' '('Expr')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
+  | AtomExpr '.' '['Expr']'              { ExprStringAccess $1 $4 }
+  -- no need for the string assignment since that's now deprecated and a syntax error
 
 SimpleExpr
   : AtomExpr                  { $1 }

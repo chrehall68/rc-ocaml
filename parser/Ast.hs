@@ -71,6 +71,11 @@ data Expr
     ExprInfix String Expr Expr
   | ExprFieldAccess Expr Path
   | ExprFieldAssignment Expr Path Expr
+  | -- array, index
+    ExprArrayAccess Expr Expr
+  | -- array, index, value
+    ExprArrayAssignment Expr Expr Expr
+  | ExprStringAccess Expr Expr
   deriving (Show, Eq)
 
 data DefinitionOrExpr
