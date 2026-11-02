@@ -287,9 +287,16 @@ spec = do
     it "parses array literals" $
       expr "[|a; b|]" `shouldBe` Right (ExprArray [var "a", var "b"])
 
-  describe "type annotations" $
-    it "has no type expressions yet" $
-      expr "(x : t)" `shouldSatisfy` isLeft
+  describe "type annotations" $ do
+    it "parses a named type" $
+      expr "(x : t)" `shouldBe` Right (ExprAnnotated (var "x") (TypeName (ExtendedPath Nothing "t")))
+    it "parses a polymorphic function type" $
+      expr "(x : 'a list -> bool)"
+        `shouldBe` Right
+          (ExprAnnotated (var "x")
+            (TypeArrow
+              (TypeApplication [TypeVariable "a"] (ExtendedPath Nothing "list"))
+              (TypeName (ExtendedPath Nothing "bool"))))
   where
     isLeft (Left _) = True
     isLeft _ = False

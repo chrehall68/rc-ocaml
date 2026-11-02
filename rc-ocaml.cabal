@@ -90,6 +90,7 @@ test-suite rc-ocaml-test
   main-is: Spec.hs
   other-modules:
     LexerSpec
+    PatternSpec
     ParserSpec
     TokensSpec
 
