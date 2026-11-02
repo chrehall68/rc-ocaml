@@ -51,10 +51,10 @@ data Expr
   | -- refers to a (potentially module-qualified) name
     ExprPath Path
   | -- Path to the constructor, Expr
-    ExprNonconstantVariant Path Expr
+    ExprNonconstantVariant {constr :: Path, expr :: Expr}
   | -- `Tagname expr would give (ExprNonconstantPolymorphicVariant "Tagname" expr)
-    ExprNonconstantPolymorphicVariant String Expr
-  | ExprAnnotated Expr TypeExpr
+    ExprNonconstantPolymorphicVariant {tagname :: String, expr :: Expr}
+  | ExprAnnotated {expr :: Expr, typeExpr :: TypeExpr}
   | ExprTuple [Expr]
   | -- the expressions are in order of appearance (left to right)
     -- utop evaluates the expression from right to left, but technically
@@ -63,12 +63,20 @@ data Expr
     ExprCons [Expr]
   | ExprArray [Expr]
   | -- source record, changed fields
-    ExprRecord (Maybe Expr) [RecordField]
-  | ExprFunctionApplication Expr [Argument]
-  | -- operator, right expression
-    ExprPrefix String Expr
-  | -- operator, left expression, right expression
-    ExprInfix String Expr Expr
+    -- used by both with and record literals; record literals have no source
+    ExprRecord {source :: Maybe Expr, fields :: [RecordField]}
+  | ExprFunctionApplication {func :: Expr, args :: [Argument]}
+  | ExprPrefix {op :: String, expr :: Expr}
+  | ExprInfix {op :: String, left :: Expr, right :: Expr}
+  | ExprFieldAccess {expr :: Expr, field :: Path}
+  | ExprFieldAssignment {expr :: Expr, field :: Path, value :: Expr}
+  | ExprArrayAccess {arr :: Expr, index :: Expr}
+  | ExprArrayAssignment {arr :: Expr, index :: Expr, value :: Expr}
+  | ExprStringAccess {str :: Expr, index :: Expr}
+  | ExprIf {cond :: Expr, thenExpr :: Expr, elseExpr :: Maybe Expr}
+  | ExprWhile {cond :: Expr, body :: Expr}
+  | ExprFor {valueName :: String, start :: Expr, end :: Expr, body :: Expr, isTo :: Bool}
+  | ExprSequence {left :: Expr, right :: Expr}
   deriving (Show, Eq)
 
 data DefinitionOrExpr
