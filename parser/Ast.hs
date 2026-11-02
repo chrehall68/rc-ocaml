@@ -46,6 +46,9 @@ data Argument
   | OptionalArgument String (Maybe Expr)
   deriving (Show, Eq)
 
+data Pattern = PatternConstant Constant
+  deriving (Show, Eq)
+
 data Expr
   = ExprConstant Constant
   | -- refers to a (potentially module-qualified) name
@@ -77,6 +80,8 @@ data Expr
   | ExprWhile {cond :: Expr, body :: Expr}
   | ExprFor {valueName :: String, start :: Expr, end :: Expr, body :: Expr, isTo :: Bool}
   | ExprSequence {left :: Expr, right :: Expr}
+  | -- match expr, each cases is (pattern, guard, body)
+    ExprMatch {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
   deriving (Show, Eq)
 
 data DefinitionOrExpr

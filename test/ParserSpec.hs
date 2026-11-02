@@ -480,6 +480,44 @@ spec = do
       parseExpr "while a do b; c done"
         `shouldBe` Right (ExprWhile {cond = a, body = seqE b c})
 
+  describe "match" $ do
+    let a = var "a"
+        b = var "b"
+        x = var "x"
+        y = var "y"
+        intPat v = PatternConstant (ConstantInt (IntLiteral {Tokens.value = v, representation = Unspecified}))
+        matchE e cs = ExprMatch {expr = e, cases = cs}
+        seqE l r = ExprSequence {left = l, right = r}
+    it "parses a single case" $
+      parseExpr "match x with 1 -> a" `shouldBe` Right (matchE x [(intPat 1, Nothing, a)])
+    it "parses several cases, with or without a leading |" $ do
+      let expected = Right (matchE x [(intPat 1, Nothing, a), (intPat 2, Nothing, b)])
+      parseExpr "match x with 1 -> a | 2 -> b" `shouldBe` expected
+      parseExpr "match x with | 1 -> a | 2 -> b" `shouldBe` expected
+    it "parses guards" $
+      parseExpr "match x with 1 when y -> a | 2 -> b"
+        `shouldBe` Right (matchE x [(intPat 1, Just y, a), (intPat 2, Nothing, b)])
+    it "allows a sequence as the scrutinee" $
+      parseExpr "match a; b with 1 -> x" `shouldBe` Right (matchE (seqE a b) [(intPat 1, Nothing, x)])
+    it "extends the last case as far as possible" $ do
+      parseExpr "match x with 1 -> a + b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, infixE "+" a b)])
+      parseExpr "match x with 1 -> a, b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, ExprTuple [a, b])])
+      parseExpr "match x with 1 -> a; b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, seqE a b)])
+    it "lets parentheses end a match" $
+      parseExpr "(match x with 1 -> a) + b"
+        `shouldBe` Right (infixE "+" (matchE x [(intPat 1, Nothing, a)]) b)
+    it "gives later cases to the innermost match" $
+      parseExpr "match x with 1 -> match y with 2 -> a | 3 -> b"
+        `shouldBe` Right
+          (matchE x [(intPat 1, Nothing, matchE y [(intPat 2, Nothing, a), (intPat 3, Nothing, b)])])
+    it "lets parentheses give later cases to the outer match" $
+      parseExpr "match x with 1 -> (match y with 2 -> a) | 3 -> b"
+        `shouldBe` Right
+          (matchE x [(intPat 1, Nothing, matchE y [(intPat 2, Nothing, a)]), (intPat 3, Nothing, b)])
+
   describe "type annotations"
     $ it "has no type expressions yet"
     $ parseExpr "(x : t)" `shouldSatisfy` isLeft

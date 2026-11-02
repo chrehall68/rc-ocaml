@@ -15,10 +15,14 @@ import Data.Char
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
 -- and see https://github.com/ocaml/ocaml/blob/a76fb1de949d320f35ce29d84d8181a7e2541f22/parsing/parser.mly#L893
 %nonassoc BELOW_COMMA
-%right ';'
+%nonassoc below_SEMI  -- for SeqExpr -> Expr, so an Expr at the end of a SeqExpr grabs as much as it can
+%nonassoc ';'
+%nonassoc WITH  -- below '|'
 %nonassoc THEN                          -- below ELSE
 %nonassoc ELSE                          -- this forces else to go with closest unmatched then
 %right ':=' '<-'
+%nonassoc below_BAR  -- for PatternMatching -> MatchCase, so a `|` goes to the innermost match
+%left '|'
 %left ','
 %right PREC_OR OR '||'
 %right PREC_AND '&' '&&'
@@ -323,6 +327,7 @@ LiteralConstant
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
+Pattern : LiteralConstant { PatternConstant $1 }
 TypeExpr 
   : {- empty -}             { TypeExpr }
 
@@ -339,7 +344,7 @@ TypeExpr
 -- thus to avoid ambiguity, we have to break Expr up into SeqExpr and Expr, and we
 -- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
 SeqExpr
-  : Expr                      { $1 }
+  : Expr %prec below_SEMI     { $1 }
   | Expr ';' SeqExpr          { ExprSequence $1 $3 }
 
 Expr
@@ -374,6 +379,7 @@ Expr
   | WHILE SeqExpr DO SeqExpr DONE     { ExprWhile $2 $4 }
   | FOR ValueName '=' SeqExpr TO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 True }
   | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
+  | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -426,6 +432,14 @@ Argument
   | LABEL SimpleExpr     { LabeledArgument $1 (Just $2) }
   | '?' LIDENT           { OptionalArgument $2 Nothing }
   | OPTLABEL SimpleExpr  { OptionalArgument $1 (Just $2) }
+
+PatternMatching
+  : MatchCase %prec below_BAR      { [$1] }
+  | MatchCase '|' PatternMatching  { $1 : $3 }
+
+MatchCase
+  : Pattern '->' SeqExpr               { ($1, Nothing, $3) }
+  | Pattern WHEN SeqExpr '->' SeqExpr  { ($1, Just $3, $5) }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
