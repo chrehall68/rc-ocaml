@@ -91,6 +91,7 @@ data Expr
     ExprMatch {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
   | ExprFunction {cases :: [(Pattern, Maybe Expr, Expr)]}
   | ExprLambda {parameters :: [Parameter], typeConstraint :: Maybe TypeExpr, body :: Expr}
+  | ExprTry {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
   deriving (Show, Eq)
 
 data DefinitionOrExpr

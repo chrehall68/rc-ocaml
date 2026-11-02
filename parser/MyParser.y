@@ -10,6 +10,7 @@ import Data.Char
 %name parse Program
 %tokentype { Token }
 %error { parseError }
+%expect 0
 
 -- lowest precedence first
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
@@ -382,6 +383,7 @@ Expr
   | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
   | FUN many1(Parameter) opt(TypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
+  | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
