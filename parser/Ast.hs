@@ -73,7 +73,11 @@ data Expr
   | ExprArrayAccess {arr :: Expr, index :: Expr}
   | ExprArrayAssignment {arr :: Expr, index :: Expr, value :: Expr}
   | ExprStringAccess {str :: Expr, index :: Expr}
-  deriving (Show, Eq)
+  | ExprIf {cond :: Expr, thenExpr :: Expr, elseExpr :: Maybe Expr}
+  | ExprWhile {cond :: Expr, body :: Expr}
+  | ExprFor {name :: String, start :: Expr, end :: Expr, body :: Expr, isTo :: Bool}
+  deriving (-- | ExprSequence {left :: Expr, right :: Expr}
+            Show, Eq)
 
 data DefinitionOrExpr
   = Definition

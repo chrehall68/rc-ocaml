@@ -13,8 +13,11 @@ import Data.Char
 
 -- lowest precedence first
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
+-- and see https://github.com/ocaml/ocaml/blob/a76fb1de949d320f35ce29d84d8181a7e2541f22/parsing/parser.mly#L893
 %nonassoc BELOW_COMMA
 %right ';'
+%nonassoc THEN                          -- below ELSE
+%nonassoc ELSE                          -- this forces else to go with closest unmatched then
 %right ':=' '<-'
 %left ','
 %right PREC_OR OR '||'
@@ -358,6 +361,12 @@ Expr
   | AtomExpr '.' '('Expr')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
   | AtomExpr '.' '['Expr']'              { ExprStringAccess $1 $4 }
   -- no need for the string assignment since that's now deprecated and a syntax error
+  | IF Expr THEN Expr              { ExprIf $2 $4 Nothing }
+  | IF Expr THEN Expr ELSE Expr    { ExprIf $2 $4 (Just $6) }
+  | WHILE Expr DO Expr DONE        { ExprWhile $2 $4 }
+  | FOR ValueName '=' Expr TO Expr DO Expr DONE { ExprFor $2 $4 $6 $8 True }
+  | FOR ValueName '=' Expr DOWNTO Expr DO Expr DONE { ExprFor $2 $4 $6 $8 False }
+  -- | Expr ';' Expr                    { ExprSequence $1 $3 }
 
 SimpleExpr
   : AtomExpr                  { $1 }

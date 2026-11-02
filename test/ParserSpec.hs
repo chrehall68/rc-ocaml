@@ -102,9 +102,19 @@ spec = do
     it "applies a constructor to a parenthesized constructor application" $
       parseExpr "C (D 1)"
         `shouldBe` Right
-          (ExprNonconstantVariant {constr = Path Nothing "C", expr = ExprNonconstantVariant {constr = Path Nothing "D", expr = int 1}})
+          ( ExprNonconstantVariant
+              { constr = Path Nothing "C",
+                expr = ExprNonconstantVariant {constr = Path Nothing "D", expr = int 1}
+              }
+          )
     it "applies a constructor to a nullary constructor" $
-      parseExpr "C D" `shouldBe` Right (ExprNonconstantVariant {constr = Path Nothing "C", expr = variant "D"})
+      parseExpr "C D"
+        `shouldBe` Right
+          ( ExprNonconstantVariant
+              { constr = Path Nothing "C",
+                expr = variant "D"
+              }
+          )
     it "only takes a simple expression as its argument" $
       parseExpr "C f x" `shouldSatisfy` isLeft
     it "applies a polymorphic variant tag" $
@@ -112,27 +122,53 @@ spec = do
 
   describe "function application" $ do
     it "applies a function to one argument" $
-      parseExpr "f 1" `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (int 1)]})
+      parseExpr "f 1"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (int 1)]
+              }
+          )
     it "applies a function to several arguments at once" $
       parseExpr "f a b"
-        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "a"), UnlabeledArgument (var "b")]})
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (var "a"), UnlabeledArgument (var "b")]
+              }
+          )
     it "treats a parenthesized application as a single argument" $
       parseExpr "f (g a) b"
         `shouldBe` Right
           ( ExprFunctionApplication
               { func = var "f",
                 args =
-                  [ UnlabeledArgument (ExprFunctionApplication {func = var "g", args = [UnlabeledArgument (var "a")]}),
+                  [ UnlabeledArgument
+                      ( ExprFunctionApplication
+                          { func = var "g",
+                            args = [UnlabeledArgument (var "a")]
+                          }
+                      ),
                     UnlabeledArgument (var "b")
                   ]
               }
           )
     it "allows nullary constructors as arguments" $
       parseExpr "f C 1"
-        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (variant "C"), UnlabeledArgument (int 1)]})
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (variant "C"), UnlabeledArgument (int 1)]
+              }
+          )
     it "applies qualified functions" $
       parseExpr "List.map f"
-        `shouldBe` Right (ExprFunctionApplication {func = qualifiedVar ["List"] "map", args = [UnlabeledArgument (var "f")]})
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = qualifiedVar ["List"] "map",
+                args = [UnlabeledArgument (var "f")]
+              }
+          )
     it "parses labeled and optional arguments" $
       parseExpr "f ~x:1 ~y ?z:2 ?w"
         `shouldBe` Right
@@ -156,7 +192,15 @@ spec = do
           )
     it "binds tighter than ::" $
       parseExpr "f a :: b"
-        `shouldBe` Right (ExprCons [ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "a")]}, var "b"])
+        `shouldBe` Right
+          ( ExprCons
+              [ ExprFunctionApplication
+                  { func = var "f",
+                    args = [UnlabeledArgument (var "a")]
+                  },
+                var "b"
+              ]
+          )
     it "can't be the application of a bare constructor" $
       parseExpr "C 1" `shouldBe` Right (ExprNonconstantVariant {constr = Path Nothing "C", expr = int 1})
 
@@ -243,21 +287,50 @@ spec = do
       parseExpr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix {op = "-", expr = b}))
     it "applies negation to a whole function application" $
       parseExpr "-f a"
-        `shouldBe` Right (ExprPrefix {op = "-", expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument a]}})
+        `shouldBe` Right
+          ( ExprPrefix
+              { op = "-",
+                expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument a]}
+              }
+          )
     it "binds prefix symbols tighter than negation" $
       parseExpr "- !a" `shouldBe` Right (ExprPrefix {op = "-", expr = ExprPrefix {op = "!", expr = a}})
     it "binds prefix symbols tighter than application" $
       parseExpr "!f x"
-        `shouldBe` Right (ExprFunctionApplication {func = ExprPrefix {op = "!", expr = var "f"}, args = [UnlabeledArgument (var "x")]})
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = ExprPrefix {op = "!", expr = var "f"},
+                args = [UnlabeledArgument (var "x")]
+              }
+          )
     it "allows prefix applications as arguments" $
       parseExpr "f !a b"
         `shouldBe` Right
-          (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (ExprPrefix {op = "!", expr = a}), UnlabeledArgument b]})
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (ExprPrefix {op = "!", expr = a}), UnlabeledArgument b]
+              }
+          )
     it "applies a prefix symbol to a parenthesized expression" $
       parseExpr "!(f x)"
-        `shouldBe` Right (ExprPrefix {op = "!", expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "x")]}})
+        `shouldBe` Right
+          ( ExprPrefix
+              { op = "!",
+                expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "x")]}
+              }
+          )
     it "mixes with other operators" $
-      parseExpr "!a + !b" `shouldBe` Right (infixE "+" (ExprPrefix {op = "!", expr = a}) (ExprPrefix {op = "!", expr = b}))
+      parseExpr "!a + !b"
+        `shouldBe` Right
+          ( infixE
+              "+"
+              ( ExprPrefix
+                  { op = "!",
+                    expr = a
+                  }
+              )
+              (ExprPrefix {op = "!", expr = b})
+          )
 
   describe "field access and assignment" $ do
     let a = var "a"
@@ -267,17 +340,51 @@ spec = do
     it "parses field access" $
       parseExpr "a.f" `shouldBe` Right (ExprFieldAccess {expr = a, field = fieldPath "f"})
     it "parses field assignment" $
-      parseExpr "a.f <- b" `shouldBe` Right (ExprFieldAssignment {expr = a, field = fieldPath "f", Ast.value = b})
+      parseExpr "a.f <- b"
+        `shouldBe` Right
+          ( ExprFieldAssignment
+              { expr = a,
+                field = fieldPath "f",
+                Ast.value = b
+              }
+          )
     it "reads a module path before the dot as a path, not a constructor" $
       parseExpr "!M.x" `shouldBe` Right (ExprPrefix {op = "!", expr = qualifiedVar ["M"] "x"})
     it "binds a prefix symbol tighter than field access" $
-      parseExpr "!a.f" `shouldBe` Right (ExprFieldAccess {expr = ExprPrefix {op = "!", expr = a}, field = fieldPath "f"})
+      parseExpr "!a.f"
+        `shouldBe` Right
+          ( ExprFieldAccess
+              { expr = ExprPrefix {op = "!", expr = a},
+                field = fieldPath "f"
+              }
+          )
     it "lets the assigned value be an operator expression" $
-      parseExpr "a.f <- b + c" `shouldBe` Right (ExprFieldAssignment {expr = a, field = fieldPath "f", Ast.value = infixE "+" b c})
+      parseExpr "a.f <- b + c"
+        `shouldBe` Right
+          ( ExprFieldAssignment
+              { expr = a,
+                field = fieldPath "f",
+                Ast.value = infixE "+" b c
+              }
+          )
     it "lets the assigned value be a tuple" $
-      parseExpr "a.f <- b, c" `shouldBe` Right (ExprFieldAssignment {expr = a, field = fieldPath "f", Ast.value = ExprTuple [b, c]})
+      parseExpr "a.f <- b, c"
+        `shouldBe` Right
+          ( ExprFieldAssignment
+              { expr = a,
+                field = fieldPath "f",
+                Ast.value = ExprTuple [b, c]
+              }
+          )
     it "associates <- and := together to the right" $
-      parseExpr "a.f <- b := c" `shouldBe` Right (ExprFieldAssignment {expr = a, field = fieldPath "f", Ast.value = infixE ":=" b c})
+      parseExpr "a.f <- b := c"
+        `shouldBe` Right
+          ( ExprFieldAssignment
+              { expr = a,
+                field = fieldPath "f",
+                Ast.value = infixE ":=" b c
+              }
+          )
 
   describe "tuples" $ do
     it "parses a flat tuple" $
@@ -288,10 +395,23 @@ spec = do
       parseExpr "a, (b, c)" `shouldBe` Right (ExprTuple [var "a", ExprTuple [var "b", var "c"]])
     it "binds constructor application tighter than ," $
       parseExpr "C a, b"
-        `shouldBe` Right (ExprTuple [ExprNonconstantVariant {constr = Path Nothing "C", expr = var "a"}, var "b"])
+        `shouldBe` Right
+          ( ExprTuple
+              [ ExprNonconstantVariant
+                  { constr = Path Nothing "C",
+                    expr = var "a"
+                  },
+                var "b"
+              ]
+          )
     it "lets parentheses move the comma inside the application" $
       parseExpr "C (a, b)"
-        `shouldBe` Right (ExprNonconstantVariant {constr = Path Nothing "C", expr = ExprTuple [var "a", var "b"]})
+        `shouldBe` Right
+          ( ExprNonconstantVariant
+              { constr = Path Nothing "C",
+                expr = ExprTuple [var "a", var "b"]
+              }
+          )
 
   describe "cons" $ do
     it "parses a chain of ::" $
@@ -301,7 +421,15 @@ spec = do
         `shouldBe` Right (ExprTuple [ExprCons [var "a", var "b"], var "c"])
     it "binds constructor application tighter than ::" $
       parseExpr "C a :: b"
-        `shouldBe` Right (ExprCons [ExprNonconstantVariant {constr = Path Nothing "C", expr = var "a"}, var "b"])
+        `shouldBe` Right
+          ( ExprCons
+              [ ExprNonconstantVariant
+                  { constr = Path Nothing "C",
+                    expr = var "a"
+                  },
+                var "b"
+              ]
+          )
 
   describe "lists and arrays" $ do
     it "parses list literals as a cons chain ending in []" $
@@ -311,9 +439,9 @@ spec = do
     it "parses array literals" $
       parseExpr "[|a; b|]" `shouldBe` Right (ExprArray [var "a", var "b"])
 
-  describe "type annotations" $
-    it "has no type expressions yet" $
-      parseExpr "(x : t)" `shouldSatisfy` isLeft
+  describe "type annotations"
+    $ it "has no type expressions yet"
+    $ parseExpr "(x : t)" `shouldSatisfy` isLeft
   where
     isLeft (Left _) = True
     isLeft _ = False
