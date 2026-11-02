@@ -439,6 +439,47 @@ spec = do
     it "parses array literals" $
       parseExpr "[|a; b|]" `shouldBe` Right (ExprArray [var "a", var "b"])
 
+  describe "sequences" $ do
+    let a = var "a"
+        b = var "b"
+        c = var "c"
+        seqE l r = ExprSequence {left = l, right = r}
+        fieldPath = Path Nothing
+    it "parses a sequence at the top level" $
+      parseExpr "a; b" `shouldBe` Right (seqE a b)
+    it "associates ; to the right" $
+      parseExpr "a; b; c" `shouldBe` Right (seqE a (seqE b c))
+    it "parses sequences inside parentheses and begin ... end" $ do
+      parseExpr "(a; b)" `shouldBe` Right (seqE a b)
+      parseExpr "begin a; b end" `shouldBe` Right (seqE a b)
+    it "binds every other operator tighter than ;" $
+      parseExpr "a := b; c, a" `shouldBe` Right (seqE (infixE ":=" a b) (ExprTuple [c, a]))
+    it "treats ; in a list as an item separator" $
+      parseExpr "[a; b; c]"
+        `shouldBe` Right (ExprCons [a, b, c, ExprConstant ConstantList])
+    it "treats ; in an array as an item separator" $
+      parseExpr "[|a; b; c|]" `shouldBe` Right (ExprArray [a, b, c])
+    it "allows a parenthesized sequence as a list item" $
+      parseExpr "[(a; b); c]"
+        `shouldBe` Right (ExprCons [seqE a b, c, ExprConstant ConstantList])
+    it "treats ; in a record as a field separator" $
+      parseExpr "{x = a; y = b}"
+        `shouldBe` Right
+          ( ExprRecord
+              { source = Nothing,
+                fields =
+                  [ RecordField (fieldPath "x") Nothing a,
+                    RecordField (fieldPath "y") Nothing b
+                  ]
+              }
+          )
+    it "ends an if branch at ;" $
+      parseExpr "if a then b; c"
+        `shouldBe` Right (seqE (ExprIf {cond = a, thenExpr = b, elseExpr = Nothing}) c)
+    it "allows sequences in a loop body" $
+      parseExpr "while a do b; c done"
+        `shouldBe` Right (ExprWhile {cond = a, body = seqE b c})
+
   describe "type annotations"
     $ it "has no type expressions yet"
     $ parseExpr "(x : t)" `shouldSatisfy` isLeft

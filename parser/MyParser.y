@@ -331,9 +331,17 @@ TypeExpr
 --   AtomExpr   - can be the head of a function application
 --   SimpleExpr - can be an argument (an atom, or a nullary constructor/tag)
 --   Expr       - everything else
+--   SeqExpr    - one+ expressions separated by `;`
 -- Arguments and constructor arguments are SimpleExprs, so that `f a b` can't
 -- be read as `f (a b)`, `(f a) b`, or `f a b`. Also, nullary constructors aren't atoms,
 -- so `C 1` can only be constructor application.
+-- Sequences get their own tier too since `;` also separates lists, arrays, and record items.
+-- thus to avoid ambiguity, we have to break Expr up into SeqExpr and Expr, and we
+-- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
+SeqExpr
+  : Expr                      { $1 }
+  | Expr ';' SeqExpr          { ExprSequence $1 $3 }
+
 Expr
   : SimpleExpr                { $1 }
   | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
@@ -357,16 +365,15 @@ Expr
   -- accessors for records, arrays, and strings
   | AtomExpr '.' Field              { ExprFieldAccess $1 $3 }
   | AtomExpr '.' Field '<-' Expr    { ExprFieldAssignment $1 $3 $5 }
-  | AtomExpr '.' '('Expr')'              { ExprArrayAccess $1 $4 }
-  | AtomExpr '.' '('Expr')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
-  | AtomExpr '.' '['Expr']'              { ExprStringAccess $1 $4 }
+  | AtomExpr '.' '(' SeqExpr ')'              { ExprArrayAccess $1 $4 }
+  | AtomExpr '.' '(' SeqExpr ')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
+  | AtomExpr '.' '[' SeqExpr ']'              { ExprStringAccess $1 $4 }
   -- no need for the string assignment since that's now deprecated and a syntax error
-  | IF Expr THEN Expr              { ExprIf $2 $4 Nothing }
-  | IF Expr THEN Expr ELSE Expr    { ExprIf $2 $4 (Just $6) }
-  | WHILE Expr DO Expr DONE        { ExprWhile $2 $4 }
-  | FOR ValueName '=' Expr TO Expr DO Expr DONE { ExprFor $2 $4 $6 $8 True }
-  | FOR ValueName '=' Expr DOWNTO Expr DO Expr DONE { ExprFor $2 $4 $6 $8 False }
-  -- | Expr ';' Expr                    { ExprSequence $1 $3 }
+  | IF SeqExpr THEN Expr              { ExprIf $2 $4 Nothing }
+  | IF SeqExpr THEN Expr ELSE Expr    { ExprIf $2 $4 (Just $6) }
+  | WHILE SeqExpr DO SeqExpr DONE     { ExprWhile $2 $4 }
+  | FOR ValueName '=' SeqExpr TO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 True }
+  | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -378,9 +385,9 @@ AtomExpr
   -- putting prefix here ensures that we get `(!f) x` from `!f x`
   | PREFIX SimpleExpr          { ExprPrefix $1 $2 }
   | ValuePath                  { ExprPath $1 }
-  | '(' Expr ')'               { $2 }
-  | BEGIN Expr END             { $2 }
-  | '(' Expr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
+  | '(' SeqExpr ')'            { $2 }
+  | BEGIN SeqExpr END          { $2 }
+  | '(' SeqExpr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
   | '[' ExprList ']'   { ExprCons $2 }
   | '[|' ExprList '|]' { ExprArray (init $2) }
   | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
@@ -442,12 +449,12 @@ ModuleItems
 
 ModuleItem
   : Definition        { [Definition] }
-  | ';;' Expr         { [Expr $2] }
+  | ';;' SeqExpr      { [Expr $2] }
   | ';;'              { [] }
 
 DefinitionOrExpr 
   : Definition        { Definition }
-  | Expr              { Expr $1 }
+  | SeqExpr           { Expr $1 }
 
 -- TODO: use actual definitions
 Definition 

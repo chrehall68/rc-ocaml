@@ -75,9 +75,9 @@ data Expr
   | ExprStringAccess {str :: Expr, index :: Expr}
   | ExprIf {cond :: Expr, thenExpr :: Expr, elseExpr :: Maybe Expr}
   | ExprWhile {cond :: Expr, body :: Expr}
-  | ExprFor {name :: String, start :: Expr, end :: Expr, body :: Expr, isTo :: Bool}
-  deriving (-- | ExprSequence {left :: Expr, right :: Expr}
-            Show, Eq)
+  | ExprFor {valueName :: String, start :: Expr, end :: Expr, body :: Expr, isTo :: Bool}
+  | ExprSequence {left :: Expr, right :: Expr}
+  deriving (Show, Eq)
 
 data DefinitionOrExpr
   = Definition
