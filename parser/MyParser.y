@@ -8,6 +8,7 @@ import Data.Char
 
 %monad { ParseResult } { (>>=) } { return }
 %name parse Program
+%name parsePattern Pattern
 %tokentype { Token }
 %error { parseError }
 
@@ -263,7 +264,7 @@ Constr
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
-  | ExtendedModulePath '.' TypeconstrName   { ExtendedPath (Just $1) $3 }
+  | ExtendedModuleName '.' Typeconstr       { qualifyType $1 $3 }
 
 Field
   : FieldName                   { Path Nothing $1 }
@@ -294,7 +295,37 @@ ExtendedModuleName
   | ExtendedModuleName '(' ExtendedModulePath ')'   { applyFunctor $1 $3 }
 
 -- 11.4 Type Expressions (https://ocaml.org/manual/5.3/types.html)
--- TODO: fill out this section
+-- These forms allow type constraints in expressions, patterns, and records.
+-- Additional type forms can be added here as they are implemented.
+TypeExpr
+  : ArrowType                          { $1 }
+
+ArrowType
+  : TupleType '->' ArrowType           { TypeArrow $1 $3 }
+  | TupleType                          { $1 }
+
+TupleType
+  : AppliedType                         { $1 }
+  | AppliedType '*' AppliedType TypeTupleTail { TypeTuple ($1 : $3 : $4) }
+
+TypeTupleTail
+  : {- empty -}                         { [] }
+  | '*' AppliedType TypeTupleTail       { $2 : $3 }
+
+AppliedType
+  : AtomicType                          { $1 }
+  | AppliedType Typeconstr              { TypeApplication [$1] $2 }
+
+AtomicType
+  : Typeconstr                          { TypeName $1 }
+  | QUOTE LIDENT                        { TypeVariable $2 }
+  | '(' TypeExpr ')'                    { $2 }
+  | '(' TypeExpr ',' TypeExpr TypeArgumentsTail ')' Typeconstr
+                                        { TypeApplication ($2 : $4 : $5) $7 }
+
+TypeArgumentsTail
+  : {- empty -}                         { [] }
+  | ',' TypeExpr TypeArgumentsTail      { $2 : $3 }
 
 -- 11.5 Constants (https://ocaml.org/manual/5.3/const.html)
 -- had to break this up into multiple rules to avoid ambiguity
@@ -317,9 +348,87 @@ LiteralConstant
   | '[|' '|]'            { ConstantArray }
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
--- TODO: fill out this section
-TypeExpr 
-  : {- empty -}             { TypeExpr }
+-- Each tier follows the OCaml precedence table: constructors and lazy bind
+-- tighter than ::, which binds tighter than tuples, |, and finally as.
+Pattern
+  : OrPattern                           { $1 }
+  | OrPattern AS ValueName              { PatternAlias $1 $3 }
+
+OrPattern
+  : TuplePattern                        { $1 }
+  | OrPattern '|' TuplePattern          { PatternOr $1 $3 }
+
+TuplePattern
+  : ConsPattern                         { $1 }
+  | ConsPattern ',' ConsPattern PatternTupleTail
+                                        { PatternTuple ($1 : $3 : $4) }
+
+PatternTupleTail
+  : {- empty -}                         { [] }
+  | ',' ConsPattern PatternTupleTail    { $2 : $3 }
+
+ConsPattern
+  : AppliedPattern                      { $1 }
+  | AppliedPattern '::' ConsPattern     { PatternCons $1 $3 }
+
+AppliedPattern
+  : SimplePattern                       { $1 }
+  | Constr SimplePattern                { PatternVariant $1 $2 }
+  | BACKTICK TagName SimplePattern      { PatternPolymorphicVariant $2 $3 }
+  | '#' Typeconstr                      { PatternType $2 }
+  | LAZY AppliedPattern                 { PatternLazy $2 }
+  | EXCEPTION AppliedPattern            { PatternException $2 }
+
+SimplePattern
+  : ValueName                           { PatternVariable $1 }
+  | '_'                                 { PatternWildcard }
+  | INT                                 { PatternConstant (ConstantInt $1) }
+  | '-' INT                             { PatternConstant (ConstantInt (negativeInt $2)) }
+  | DOUBLE                              { PatternConstant (ConstantDouble $1) }
+  | '-' DOUBLE                          { PatternConstant (ConstantDouble (negate $2)) }
+  | CHAR                                { PatternConstant (ConstantChar $1) }
+  | CHAR '..' CHAR                      { PatternRange $1 $3 }
+  | STRING                              { PatternConstant (ConstantString $1) }
+  | TRUE                                { PatternConstant (ConstantBool True) }
+  | FALSE                               { PatternConstant (ConstantBool False) }
+  | '(' ')'                             { PatternConstant ConstantUnit }
+  | Constr                              { PatternConstant (ConstantVariant $1) }
+  | BACKTICK TagName                    { PatternConstant (ConstantPolymorphicVariant $2) }
+  | '(' Pattern ')'                     { $2 }
+  | '(' Pattern ':' TypeExpr ')'        { PatternAnnotated $2 $4 }
+  | '[' PatternElements ']'             { PatternList $2 }
+  | '[|' PatternElements '|]'           { PatternArray $2 }
+  | '{' RecordPatternFields '}'         { PatternRecord (fst $2) (snd $2) }
+  | ModulePath '.' '(' Pattern ')'      { PatternLocalOpen $1 $4 }
+  | ModulePath '.' '[' PatternElements ']'  { PatternLocalOpen $1 (PatternList $4) }
+  | ModulePath '.' '[|' PatternElements '|]' { PatternLocalOpen $1 (PatternArray $4) }
+  | ModulePath '.' '{' RecordPatternFields '}' { PatternLocalOpen $1 (PatternRecord (fst $4) (snd $4)) }
+
+PatternElements
+  : {- empty -}                         { [] }
+  | PatternElementList opt(';')         { $1 }
+
+PatternElementList
+  : Pattern                             { [$1] }
+  | PatternElementList ';' Pattern      { $1 ++ [$3] }
+
+RecordPatternFields
+  : RecordPatternField RecordPatternTail
+                                        { let (fields, open) = $2 in ($1 : fields, open) }
+
+RecordPatternTail
+  : {- empty -}                         { ([], False) }
+  | ';'                                 { ([], False) }
+  | ';' '_'                             { ([], True) }
+  | ';' '_' ';'                         { ([], True) }
+  | ';' RecordPatternField RecordPatternTail
+                                        { let (fields, open) = $3 in ($2 : fields, open) }
+
+RecordPatternField
+  : Field                               { PatternField $1 Nothing (PatternVariable (pathName $1)) }
+  | Field ':' TypeExpr                  { PatternField $1 (Just $3) (PatternVariable (pathName $1)) }
+  | Field '=' Pattern                   { PatternField $1 Nothing $3 }
+  | Field ':' TypeExpr '=' Pattern      { PatternField $1 (Just $3) $5 }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -467,5 +576,18 @@ constrOfPath (ModulePath ms) = case reverse ms of
 
 applyFunctor :: ExtendedModuleName -> ExtendedModulePath -> ExtendedModuleName
 applyFunctor (ExtendedModuleName m args) arg = ExtendedModuleName m (args ++ [arg])
+
+qualifyType :: ExtendedModuleName -> ExtendedPath -> ExtendedPath
+qualifyType m (ExtendedPath path name) =
+  let modules = case path of
+        Nothing -> []
+        Just (ExtendedModulePath ms) -> ms
+   in ExtendedPath (Just (ExtendedModulePath (m : modules))) name
+
+pathName :: Path -> String
+pathName (Path _ n) = n
+
+negativeInt :: IntLiteral -> IntLiteral
+negativeInt n = n { value = negate (value n) }
 
 }

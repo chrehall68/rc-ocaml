@@ -34,7 +34,39 @@ data Constant
   | ConstantVariant Path -- constant variants are variants without arguments
   deriving (Show, Eq)
 
-data TypeExpr = TypeExpr
+data TypeExpr
+  = TypeName ExtendedPath
+  | TypeVariable String
+  | TypeArrow TypeExpr TypeExpr
+  | TypeTuple [TypeExpr]
+  | TypeApplication [TypeExpr] ExtendedPath
+  deriving (Show, Eq)
+
+-- The optional type annotation belongs to the field, while its pattern
+-- describes the value matched by that field.  A shorthand field binds its
+-- unqualified name, even when the field path is module-qualified.
+data PatternField = PatternField Path (Maybe TypeExpr) Pattern
+  deriving (Show, Eq)
+
+data Pattern
+  = PatternVariable String
+  | PatternWildcard
+  | PatternConstant Constant
+  | PatternAlias Pattern String
+  | PatternAnnotated Pattern TypeExpr
+  | PatternOr Pattern Pattern
+  | PatternVariant Path Pattern
+  | PatternPolymorphicVariant String Pattern
+  | PatternType ExtendedPath
+  | PatternTuple [Pattern]
+  | PatternCons Pattern Pattern
+  | PatternList [Pattern]
+  | PatternArray [Pattern]
+  | PatternRecord [PatternField] Bool -- True when the record ends in ; _
+  | PatternRange Char Char
+  | PatternLazy Pattern
+  | PatternException Pattern
+  | PatternLocalOpen ModulePath Pattern
   deriving (Show, Eq)
 
 data RecordField = RecordField Path (Maybe TypeExpr) Expr
