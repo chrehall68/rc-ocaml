@@ -49,6 +49,13 @@ data Argument
 data Pattern = PatternConstant Constant
   deriving (Show, Eq)
 
+data Parameter
+  = ParameterPattern Pattern
+  | ParameterLabel {label :: String, parameterTypeConstraint :: Maybe TypeExpr, parameterPattern :: Maybe Pattern}
+  | ParameterOptional {label :: String, parameterTypeConstraint :: Maybe TypeExpr, parameterDefault :: Maybe Expr}
+  | ParameterOptionalPattern {label :: String, pattern :: Pattern, parameterTypeConstraint :: Maybe TypeExpr, parameterDefault :: Maybe Expr}
+  deriving (Show, Eq)
+
 data Expr
   = ExprConstant Constant
   | -- refers to a (potentially module-qualified) name
@@ -82,6 +89,8 @@ data Expr
   | ExprSequence {left :: Expr, right :: Expr}
   | -- match expr, each cases is (pattern, guard, body)
     ExprMatch {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
+  | ExprFunction {cases :: [(Pattern, Maybe Expr, Expr)]}
+  | ExprLambda {parameters :: [Parameter], typeConstraint :: Maybe TypeExpr, body :: Expr}
   deriving (Show, Eq)
 
 data DefinitionOrExpr

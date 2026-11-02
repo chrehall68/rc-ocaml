@@ -329,7 +329,7 @@ LiteralConstant
 -- TODO: fill out this section
 Pattern : LiteralConstant { PatternConstant $1 }
 TypeExpr 
-  : {- empty -}             { TypeExpr }
+  : '_'             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -380,6 +380,8 @@ Expr
   | FOR ValueName '=' SeqExpr TO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 True }
   | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
   | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
+  | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
+  | FUN many1(Parameter) opt(TypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -440,6 +442,22 @@ PatternMatching
 MatchCase
   : Pattern '->' SeqExpr               { ($1, Nothing, $3) }
   | Pattern WHEN SeqExpr '->' SeqExpr  { ($1, Just $3, $5) }
+
+
+ParameterTypeExpr
+  : ':' TypeExpr { $2 }
+ParameterDefaultValue
+  : '=' Expr { $2 }
+Parameter
+  : Pattern    { ParameterPattern $1}
+  | '~' LIDENT { ParameterLabel $2 Nothing Nothing }
+  | '~' '(' LIDENT ')' { ParameterLabel $3 Nothing Nothing }
+  | '~' '(' LIDENT ':' TypeExpr ')' { ParameterLabel $3 (Just $5) Nothing }
+  | LABEL Pattern { ParameterLabel $1 Nothing (Just $2) }
+  | '?' LIDENT  { ParameterOptional $2 Nothing Nothing }
+  | '?' '(' LIDENT opt(ParameterTypeExpr) opt(ParameterDefaultValue) ')'  { ParameterOptional $3 $4 $5 }
+  | OPTLABEL Pattern { ParameterOptionalPattern $1 $2 Nothing Nothing }
+  | OPTLABEL '(' Pattern opt(ParameterTypeExpr) opt(ParameterDefaultValue) ')' { ParameterOptionalPattern $1 $3 $4 $5 }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
