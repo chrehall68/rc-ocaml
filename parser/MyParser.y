@@ -346,6 +346,7 @@ TypeExpr
 -- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
 SeqExpr
   : Expr %prec below_SEMI     { $1 }
+  | Expr ';'                  { $1 }
   | Expr ';' SeqExpr          { ExprSequence $1 $3 }
 
 Expr
@@ -382,7 +383,7 @@ Expr
   | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
   | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
-  | FUN many1(Parameter) opt(TypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
+  | FUN many1(Parameter) opt(AnnotatedTypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
   | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
 
 SimpleExpr
@@ -419,11 +420,12 @@ ExprList
   | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
   | Expr               { [$1, ExprConstant ConstantList] }
 
+AnnotatedTypeExpr
+  : ':' TypeExpr { $2 }
 RecordField
   : Field          { RecordField $1 Nothing (ExprPath $1) }
-  | Field ':' TypeExpr { RecordField $1 (Just $3) (ExprPath $1) }
-  | Field '=' Expr     { RecordField $1 Nothing $3 }
-  | Field ':' TypeExpr '=' Expr { RecordField $1 (Just $3) $5 }
+  | Field AnnotatedTypeExpr { RecordField $1 (Just $2) (ExprPath $1) }
+  | Field opt(AnnotatedTypeExpr) '=' Expr { RecordField $1 $2 $4 }
 ExprFieldList
   : RecordField ';' ExprFieldList  { $1 : $3 }
   | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
@@ -446,10 +448,8 @@ MatchCase
   | Pattern WHEN SeqExpr '->' SeqExpr  { ($1, Just $3, $5) }
 
 
-ParameterTypeExpr
-  : ':' TypeExpr { $2 }
-ParameterDefaultValue
-  : '=' Expr { $2 }
+ParameterExpr
+ : '=' SeqExpr { $2 }
 Parameter
   : Pattern    { ParameterPattern $1}
   | '~' LIDENT { ParameterLabel $2 Nothing Nothing }
@@ -457,9 +457,9 @@ Parameter
   | '~' '(' LIDENT ':' TypeExpr ')' { ParameterLabel $3 (Just $5) Nothing }
   | LABEL Pattern { ParameterLabel $1 Nothing (Just $2) }
   | '?' LIDENT  { ParameterOptional $2 Nothing Nothing }
-  | '?' '(' LIDENT opt(ParameterTypeExpr) opt(ParameterDefaultValue) ')'  { ParameterOptional $3 $4 $5 }
+  | '?' '(' LIDENT opt(AnnotatedTypeExpr) opt(ParameterExpr) ')'  { ParameterOptional $3 $4 $5 }
   | OPTLABEL Pattern { ParameterOptionalPattern $1 $2 Nothing Nothing }
-  | OPTLABEL '(' Pattern opt(ParameterTypeExpr) opt(ParameterDefaultValue) ')' { ParameterOptionalPattern $1 $3 $4 $5 }
+  | OPTLABEL '(' Pattern opt(AnnotatedTypeExpr) opt(ParameterExpr) ')' { ParameterOptionalPattern $1 $3 $4 $5 }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
