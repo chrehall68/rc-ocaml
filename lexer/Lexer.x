@@ -334,13 +334,17 @@ alexEOF = do
 -- similar to alexMonadScan, but calls alexScanUser instead of just alexScan
 scanToken :: Alex Token
 scanToken = do
-  inp <- alexGetInput
+  inp <- alexGetInput -- input before we consume any characters
   sc  <- alexGetStartCode
   us  <- alexGetUserState
   case alexScanUser us inp sc of
     AlexEOF -> alexEOF
-    AlexError ((AlexPn _ line col), _, _, _) ->
-      alexError ("Unexpected token at line " ++ show line ++ ", column " ++ show col)
+    AlexError _ -> do
+      -- since this comes from before we consumed any characters, 
+      -- we know the first character in the input is the one that caused the error
+      let ((AlexPn _ line col), _, _, input) = inp  
+      let errorChar = head input
+      alexError ("Unexpected token " ++ [ errorChar ] ++ " at line " ++ show line ++ ", column " ++ show col)
     AlexSkip inp' _ -> alexSetInput inp' >> scanToken
     AlexToken inp' len action -> do
       alexSetInput inp'
