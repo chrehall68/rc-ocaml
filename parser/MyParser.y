@@ -10,15 +10,20 @@ import Data.Char
 %name parse Program
 %tokentype { Token }
 %error { parseError }
+%expect 0
 
 -- lowest precedence first
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
 -- and see https://github.com/ocaml/ocaml/blob/a76fb1de949d320f35ce29d84d8181a7e2541f22/parsing/parser.mly#L893
 %nonassoc BELOW_COMMA
-%right ';'
+%nonassoc below_SEMI  -- for SeqExpr -> Expr, so an Expr at the end of a SeqExpr grabs as much as it can
+%nonassoc ';'
+%nonassoc WITH  -- below '|'
 %nonassoc THEN                          -- below ELSE
 %nonassoc ELSE                          -- this forces else to go with closest unmatched then
 %right ':=' '<-'
+%nonassoc below_BAR  -- for PatternMatching -> MatchCase, so a `|` goes to the innermost match
+%left '|'
 %left ','
 %right PREC_OR OR '||'
 %right PREC_AND '&' '&&'
@@ -323,8 +328,9 @@ LiteralConstant
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
+Pattern : LiteralConstant { PatternConstant $1 }
 TypeExpr 
-  : {- empty -}             { TypeExpr }
+  : '_'             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -339,7 +345,8 @@ TypeExpr
 -- thus to avoid ambiguity, we have to break Expr up into SeqExpr and Expr, and we
 -- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
 SeqExpr
-  : Expr                      { $1 }
+  : Expr %prec below_SEMI     { $1 }
+  | Expr ';'                  { $1 }
   | Expr ';' SeqExpr          { ExprSequence $1 $3 }
 
 Expr
@@ -374,6 +381,10 @@ Expr
   | WHILE SeqExpr DO SeqExpr DONE     { ExprWhile $2 $4 }
   | FOR ValueName '=' SeqExpr TO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 True }
   | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
+  | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
+  | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
+  | FUN many1(Parameter) opt(AnnotatedTypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
+  | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -409,11 +420,12 @@ ExprList
   | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
   | Expr               { [$1, ExprConstant ConstantList] }
 
+AnnotatedTypeExpr
+  : ':' TypeExpr { $2 }
 RecordField
   : Field          { RecordField $1 Nothing (ExprPath $1) }
-  | Field ':' TypeExpr { RecordField $1 (Just $3) (ExprPath $1) }
-  | Field '=' Expr     { RecordField $1 Nothing $3 }
-  | Field ':' TypeExpr '=' Expr { RecordField $1 (Just $3) $5 }
+  | Field AnnotatedTypeExpr { RecordField $1 (Just $2) (ExprPath $1) }
+  | Field opt(AnnotatedTypeExpr) '=' Expr { RecordField $1 $2 $4 }
 ExprFieldList
   : RecordField ';' ExprFieldList  { $1 : $3 }
   | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
@@ -426,6 +438,28 @@ Argument
   | LABEL SimpleExpr     { LabeledArgument $1 (Just $2) }
   | '?' LIDENT           { OptionalArgument $2 Nothing }
   | OPTLABEL SimpleExpr  { OptionalArgument $1 (Just $2) }
+
+PatternMatching
+  : MatchCase %prec below_BAR      { [$1] }
+  | MatchCase '|' PatternMatching  { $1 : $3 }
+
+MatchCase
+  : Pattern '->' SeqExpr               { ($1, Nothing, $3) }
+  | Pattern WHEN SeqExpr '->' SeqExpr  { ($1, Just $3, $5) }
+
+
+ParameterExpr
+ : '=' SeqExpr { $2 }
+Parameter
+  : Pattern    { ParameterPattern $1}
+  | '~' LIDENT { ParameterLabel $2 Nothing Nothing }
+  | '~' '(' LIDENT ')' { ParameterLabel $3 Nothing Nothing }
+  | '~' '(' LIDENT ':' TypeExpr ')' { ParameterLabel $3 (Just $5) Nothing }
+  | LABEL Pattern { ParameterLabel $1 Nothing (Just $2) }
+  | '?' LIDENT  { ParameterOptional $2 Nothing Nothing }
+  | '?' '(' LIDENT opt(AnnotatedTypeExpr) opt(ParameterExpr) ')'  { ParameterOptional $3 $4 $5 }
+  | OPTLABEL Pattern { ParameterOptionalPattern $1 $2 Nothing Nothing }
+  | OPTLABEL '(' Pattern opt(AnnotatedTypeExpr) opt(ParameterExpr) ')' { ParameterOptionalPattern $1 $3 $4 $5 }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)

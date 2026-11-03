@@ -39,6 +39,9 @@ infixE o l r = ExprInfix {op = o, left = l, right = r}
 int :: Int -> Expr
 int v = ExprConstant (ConstantInt (IntLiteral {Tokens.value = v, representation = Unspecified}))
 
+intPat :: Int -> Pattern
+intPat v = PatternConstant (ConstantInt (IntLiteral {Tokens.value = v, representation = Unspecified}))
+
 spec :: Spec
 spec = do
   describe "programs" $ do
@@ -480,9 +483,230 @@ spec = do
       parseExpr "while a do b; c done"
         `shouldBe` Right (ExprWhile {cond = a, body = seqE b c})
 
-  describe "type annotations"
-    $ it "has no type expressions yet"
-    $ parseExpr "(x : t)" `shouldSatisfy` isLeft
+  describe "match" $ do
+    let a = var "a"
+        b = var "b"
+        x = var "x"
+        y = var "y"
+        matchE e cs = ExprMatch {expr = e, cases = cs}
+        seqE l r = ExprSequence {left = l, right = r}
+    it "parses a single case" $
+      parseExpr "match x with 1 -> a" `shouldBe` Right (matchE x [(intPat 1, Nothing, a)])
+    it "parses several cases, with or without a leading |" $ do
+      let expected = Right (matchE x [(intPat 1, Nothing, a), (intPat 2, Nothing, b)])
+      parseExpr "match x with 1 -> a | 2 -> b" `shouldBe` expected
+      parseExpr "match x with | 1 -> a | 2 -> b" `shouldBe` expected
+    it "parses guards" $
+      parseExpr "match x with 1 when y -> a | 2 -> b"
+        `shouldBe` Right (matchE x [(intPat 1, Just y, a), (intPat 2, Nothing, b)])
+    it "allows a sequence as the scrutinee" $
+      parseExpr "match a; b with 1 -> x" `shouldBe` Right (matchE (seqE a b) [(intPat 1, Nothing, x)])
+    it "extends the last case as far as possible" $ do
+      parseExpr "match x with 1 -> a + b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, infixE "+" a b)])
+      parseExpr "match x with 1 -> a, b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, ExprTuple [a, b])])
+      parseExpr "match x with 1 -> a; b"
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, seqE a b)])
+    it "lets parentheses end a match" $
+      parseExpr "(match x with 1 -> a) + b"
+        `shouldBe` Right (infixE "+" (matchE x [(intPat 1, Nothing, a)]) b)
+    it "gives later cases to the innermost match" $
+      parseExpr "match x with 1 -> match y with 2 -> a | 3 -> b"
+        `shouldBe` Right
+          (matchE x [(intPat 1, Nothing, matchE y [(intPat 2, Nothing, a), (intPat 3, Nothing, b)])])
+    it "lets parentheses give later cases to the outer match" $
+      parseExpr "match x with 1 -> (match y with 2 -> a) | 3 -> b"
+        `shouldBe` Right
+          (matchE x [(intPat 1, Nothing, matchE y [(intPat 2, Nothing, a)]), (intPat 3, Nothing, b)])
+
+  describe "function" $ do
+    let a = var "a"
+        b = var "b"
+        x = var "x"
+    it "parses a single case" $
+      parseExpr "function 1 -> a" `shouldBe` Right (ExprFunction {cases = [(intPat 1, Nothing, a)]})
+    it "parses several cases, with or without a leading |" $ do
+      let expected = Right (ExprFunction {cases = [(intPat 1, Nothing, a), (intPat 2, Nothing, b)]})
+      parseExpr "function 1 -> a | 2 -> b" `shouldBe` expected
+      parseExpr "function | 1 -> a | 2 -> b" `shouldBe` expected
+    it "parses guards" $
+      parseExpr "function 1 when x -> a"
+        `shouldBe` Right (ExprFunction {cases = [(intPat 1, Just x, a)]})
+    it "gives later cases to an inner match" $
+      parseExpr "function 1 -> match x with 2 -> a | 3 -> b"
+        `shouldBe` Right
+          ( ExprFunction
+              { cases =
+                  [ ( intPat 1,
+                      Nothing,
+                      ExprMatch {expr = x, cases = [(intPat 2, Nothing, a), (intPat 3, Nothing, b)]}
+                    )
+                  ]
+              }
+          )
+
+  describe "fun" $ do
+    let a = var "a"
+        b = var "b"
+        lambda ps e = ExprLambda {parameters = ps, typeConstraint = Nothing, body = e}
+    it "parses a single pattern parameter" $
+      parseExpr "fun 1 -> a" `shouldBe` Right (lambda [ParameterPattern (intPat 1)] a)
+    it "parses several parameters" $
+      parseExpr "fun 1 2 -> a"
+        `shouldBe` Right (lambda [ParameterPattern (intPat 1), ParameterPattern (intPat 2)] a)
+    it "parses a return type constraint" $
+      parseExpr "fun 1 : _ -> a"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterPattern (intPat 1)], typeConstraint = Just TypeExpr, body = a})
+    it "extends the body as far as possible" $
+      parseExpr "fun 1 -> a; b"
+        `shouldBe` Right (lambda [ParameterPattern (intPat 1)] (ExprSequence {left = a, right = b}))
+    it "lets parentheses end the body" $
+      parseExpr "(fun 1 -> a) b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = lambda [ParameterPattern (intPat 1)] a,
+                args = [UnlabeledArgument b]
+              }
+          )
+    it "parses labeled parameters" $ do
+      parseExpr "fun ~x -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
+      parseExpr "fun ~(x) -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
+      parseExpr "fun ~(x : _) -> a" `shouldBe` Right (lambda [ParameterLabel "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ~x:1 -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing (Just (intPat 1))] a)
+    it "parses optional parameters" $ do
+      parseExpr "fun ?x -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
+      parseExpr "fun ?(x) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
+      parseExpr "fun ?(x : _) -> a" `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ?(x = b) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just b)] a)
+      parseExpr "fun ?(x : _ = b) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just b)] a)
+    it "parses optional parameters with patterns" $ do
+      parseExpr "fun ?x:1 -> a"
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
+      parseExpr "fun ?x:(1) -> a"
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
+      parseExpr "fun ?x:(1 : _ = b) -> a"
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just b)] a)
+    -- each expected tree below matches what `ocamlc -stop-after parsing -dsource` prints
+    it "takes a whole sequence as an optional parameter's default" $ do
+      let c = var "c"
+          d = var "d"
+          seqE l r = ExprSequence {left = l, right = r}
+      parseExpr "fun ?(x = b; c) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b c))] a)
+      parseExpr "fun ?(x : _ = b; c) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just (seqE b c))] a)
+      parseExpr "fun ?x:(1 = b; c) -> a"
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing (Just (seqE b c))] a)
+      parseExpr "fun ?x:(1 : _ = b; c) -> a"
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just (seqE b c))] a)
+      parseExpr "fun ?(x = b; c; d) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b (seqE c d)))] a)
+    it "takes any expression as an optional parameter's default" $ do
+      let c = var "c"
+      parseExpr "fun ?(x = b, c) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (ExprTuple [b, c]))] a)
+      parseExpr "fun ?(x = b := c) -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (infixE ":=" b c))] a)
+      parseExpr "fun ?(x = if b then c) -> a"
+        `shouldBe` Right
+          (lambda [ParameterOptional "x" Nothing (Just (ExprIf {cond = b, thenExpr = c, elseExpr = Nothing}))] a)
+      parseExpr "fun ?(x = match b with 1 -> c | 2 -> a) -> a"
+        `shouldBe` Right
+          ( lambda
+              [ ParameterOptional
+                  "x"
+                  Nothing
+                  (Just (ExprMatch {expr = b, cases = [(intPat 1, Nothing, c), (intPat 2, Nothing, a)]}))
+              ]
+              a
+          )
+    it "keeps the default inside the parentheses" $
+      parseExpr "fun ?(x = b) 1 -> a"
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just b), ParameterPattern (intPat 1)] a)
+    it "mixes parameter kinds" $
+      parseExpr "fun 1 ~x ?y -> a"
+        `shouldBe` Right
+          ( lambda
+              [ParameterPattern (intPat 1), ParameterLabel "x" Nothing Nothing, ParameterOptional "y" Nothing Nothing]
+              a
+          )
+    it "needs at least one parameter" $
+      parseExpr "fun -> a" `shouldSatisfy` isLeft
+
+  describe "try" $ do
+    let a = var "a"
+        b = var "b"
+        c = var "c"
+    it "parses a single handler" $
+      parseExpr "try a with 1 -> b" `shouldBe` Right (ExprTry {expr = a, cases = [(intPat 1, Nothing, b)]})
+    it "parses several handlers, with or without a leading |" $ do
+      let expected = Right (ExprTry {expr = a, cases = [(intPat 1, Nothing, b), (intPat 2, Nothing, c)]})
+      parseExpr "try a with 1 -> b | 2 -> c" `shouldBe` expected
+      parseExpr "try a with | 1 -> b | 2 -> c" `shouldBe` expected
+    it "allows a sequence as the body" $
+      parseExpr "try a; b with 1 -> c"
+        `shouldBe` Right (ExprTry {expr = ExprSequence {left = a, right = b}, cases = [(intPat 1, Nothing, c)]})
+    it "parses guards" $
+      parseExpr "try a with 1 when b -> c" `shouldBe` Right (ExprTry {expr = a, cases = [(intPat 1, Just b, c)]})
+
+  -- each expected tree below matches what `ocamlc -stop-after parsing -dsource` prints
+  describe "trailing ;" $ do
+    let a = var "a"
+        b = var "b"
+        c = var "c"
+        x = var "x"
+        seqE l r = ExprSequence {left = l, right = r}
+    it "drops a trailing ; after a single expression" $ do
+      parseExpr "(a;)" `shouldBe` Right a
+      parseExpr "begin a; end" `shouldBe` Right a
+    it "drops a trailing ; after a sequence" $ do
+      parseExpr "(a; b;)" `shouldBe` Right (seqE a b)
+      parseExpr "begin a; b; end" `shouldBe` Right (seqE a b)
+    it "allows a trailing ; at the top level" $
+      exprsOf "a; ;; b;" `shouldBe` Right [a, b]
+    it "allows a trailing ; before a type annotation" $ do
+      parseExpr "(a; : _)" `shouldBe` Right (ExprAnnotated {expr = a, typeExpr = TypeExpr})
+      parseExpr "(a; b : _)" `shouldBe` Right (ExprAnnotated {expr = seqE a b, typeExpr = TypeExpr})
+    it "allows a trailing ; in conditions and loops" $ do
+      parseExpr "if a; then b" `shouldBe` Right (ExprIf {cond = a, thenExpr = b, elseExpr = Nothing})
+      parseExpr "while a; do b; done" `shouldBe` Right (ExprWhile {cond = a, body = b})
+      parseExpr "for i = a; to b; do c; done"
+        `shouldBe` Right (ExprFor {valueName = "i", start = a, end = b, body = c, isTo = True})
+    it "allows a trailing ; in array and string indices" $ do
+      parseExpr "x.(a;)" `shouldBe` Right (ExprArrayAccess {arr = x, index = a})
+      parseExpr "x.[a;]" `shouldBe` Right (ExprStringAccess {str = x, index = a})
+    it "allows a trailing ; in match, try and function cases" $ do
+      parseExpr "match a; with 1 -> b" `shouldBe` Right (ExprMatch {expr = a, cases = [(intPat 1, Nothing, b)]})
+      parseExpr "try a; with 1 -> b" `shouldBe` Right (ExprTry {expr = a, cases = [(intPat 1, Nothing, b)]})
+      parseExpr "match x with 1 -> a; | 2 -> b"
+        `shouldBe` Right (ExprMatch {expr = x, cases = [(intPat 1, Nothing, a), (intPat 2, Nothing, b)]})
+      parseExpr "match x with 1 when a; -> b"
+        `shouldBe` Right (ExprMatch {expr = x, cases = [(intPat 1, Just a, b)]})
+      parseExpr "function 1 -> a; | 2 -> b"
+        `shouldBe` Right (ExprFunction {cases = [(intPat 1, Nothing, a), (intPat 2, Nothing, b)]})
+    it "allows a trailing ; in fun bodies and defaults" $ do
+      let lambda ps e = ExprLambda {parameters = ps, typeConstraint = Nothing, body = e}
+      parseExpr "(fun 1 -> a;)" `shouldBe` Right (lambda [ParameterPattern (intPat 1)] a)
+      parseExpr "fun ?(x = a;) -> c" `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just a)] c)
+    it "still treats a trailing ; in lists, arrays and records as a separator" $ do
+      parseExpr "[a; b;]" `shouldBe` Right (ExprCons [a, b, ExprConstant ConstantList])
+      parseExpr "[|a; b;|]" `shouldBe` Right (ExprArray [a, b])
+      parseExpr "{x = a;}"
+        `shouldBe` Right (ExprRecord {source = Nothing, fields = [RecordField (Path Nothing "x") Nothing a]})
+    it "rejects more than one trailing ;" $ do
+      parseExpr "(a; ;)" `shouldSatisfy` isLeft
+      parseExpr "(a;;)" `shouldSatisfy` isLeft
+    it "rejects a ; after a type annotation" $
+      parseExpr "(a : _;)" `shouldSatisfy` isLeft
+
+  describe "type annotations" $ do
+    it "parses the _ placeholder type" $
+      parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExpr})
+    it "has no other type expressions yet" $
+      parseExpr "(x : t)" `shouldSatisfy` isLeft
   where
     isLeft (Left _) = True
     isLeft _ = False

@@ -1,2 +1,5 @@
 dist-newstyle
 .vscode/
+*.cmi
+*.cmo
+*.out
