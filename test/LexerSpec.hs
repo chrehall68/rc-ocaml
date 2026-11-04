@@ -223,8 +223,8 @@ spec = do
     it "keeps whitespace inside strings" $
       alexScanTokens "\"  \t \"" `shouldBe` Right [TokenString "  \t "]
     it "counts lines in error positions" $ do
-      alexScanTokens "x\n\x01" `shouldBe` Left "Unexpected token at line 2, column 1"
-      alexScanTokens "x\n\ny \x01" `shouldBe` Left "Unexpected token at line 3, column 3"
+      alexScanTokens "x\n\x01" `shouldBe` Left "Unexpected token \SOH at line 2, column 1\n"
+      alexScanTokens "x\n\ny \x01" `shouldBe` Left "Unexpected token \SOH at line 1, column 3\n"
     it "rejects unicode whitespace outside strings, like OCaml" $ do
       alexScanTokens "x\x00a0y" `shouldSatisfy` isLeft
       alexScanTokens "let\x2003x" `shouldSatisfy` isLeft
