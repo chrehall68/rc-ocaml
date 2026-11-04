@@ -223,8 +223,8 @@ spec = do
     it "keeps whitespace inside strings" $
       alexScanTokens "\"  \t \"" `shouldBe` Right [TokenString "  \t "]
     it "counts lines in error positions" $ do
-      alexScanTokens "x\n\x01" `shouldBe` Left "Unexpected token at line 2, column 1"
-      alexScanTokens "x\n\ny \x01" `shouldBe` Left "Unexpected token at line 3, column 3"
+      alexScanTokens "x\n\x01" `shouldBe` Left "Unexpected token \SOH at line 2, column 1\n"
+      alexScanTokens "x\n\ny \x01" `shouldBe` Left "Unexpected token \SOH at line 3, column 3\n"
     it "rejects unicode whitespace outside strings, like OCaml" $ do
       alexScanTokens "x\x00a0y" `shouldSatisfy` isLeft
       alexScanTokens "let\x2003x" `shouldSatisfy` isLeft
@@ -248,7 +248,51 @@ spec = do
       alexScanTokens "λ" `shouldSatisfy` isLeft
       alexScanTokens "日本" `shouldSatisfy` isLeft
     it "tracks columns in characters, not bytes" $
-      alexScanTokens "é \x01" `shouldBe` Left "Unexpected token at line 1, column 3"
+      alexScanTokens "é \x01" `shouldBe` Left "Unexpected token \SOH at line 1, column 3\n"
+
+  describe "error recovery" $ do
+    it "reports every error on a line" $
+      alexScanTokens "a \SOH b \STX"
+        `shouldBe` Left (errs [('\SOH', 1, 3), ('\STX', 1, 7)])
+    it "reports adjacent bad characters separately" $
+      alexScanTokens "\SOH\STX"
+        `shouldBe` Left (errs [('\SOH', 1, 1), ('\STX', 1, 2)])
+    it "keeps positions correct across lines after skipping" $
+      alexScanTokens "\SOH\nlet\n  \STX"
+        `shouldBe` Left (errs [('\SOH', 1, 1), ('\STX', 3, 3)])
+    it "skips only the bad character, not the token after it" $ do
+      alexScanTokens "\SOHlet" `shouldBe` Left (errs [('\SOH', 1, 1)])
+      alexScanTokens "x\SOH'a'" `shouldBe` Left (errs [('\SOH', 1, 2)])
+    it "resumes lexing a string that starts right after an error" $
+      alexScanTokens "\SOH\"abc"
+        `shouldBe` Left
+          ( errs [('\SOH', 1, 1)]
+              ++ "unterminated string literal; no matching closing quote found\n"
+          )
+    it "reports end-of-input errors after earlier errors" $
+      alexScanTokens "\SOH (* never closed"
+        `shouldBe` Left
+          ( errs [('\SOH', 1, 1)]
+              ++ "unterminated comment; no matching closing comment found\n"
+          )
+    it "skips a whole multi-byte character" $ do
+      alexScanTokens "λ\SOH" `shouldBe` Left (errs [('λ', 1, 1), ('\SOH', 1, 2)])
+      alexScanTokens "日本" `shouldBe` Left (errs [('日', 1, 1), ('本', 1, 2)])
+      alexScanTokens "😀 x" `shouldBe` Left (errs [('😀', 1, 1)])
+    it "skips a character that shares a UTF-8 lead byte with a valid letter" $
+      -- ű (C5 B1) shares its lead byte with Œ (C5 92), so the DFA gets partway in
+      alexScanTokens "űx\SOH" `shouldBe` Left (errs [('ű', 1, 1), ('\SOH', 1, 3)])
+    it "stays inside a quoted string after a bad escape" $
+      -- if recovery left the string, the closing quote would open a new,
+      -- unterminated string and we'd get a different error
+      alexScanTokens "\"\\z\" \SOH"
+        `shouldBe` Left (errs [('\\', 1, 2), ('\SOH', 1, 6)])
   where
     isLeft (Left _) = True
     isLeft _ = False
+    errs :: [(Char, Int, Int)] -> String
+    errs es =
+      unlines
+        [ "Unexpected token " ++ [c] ++ " at line " ++ show l ++ ", column " ++ show col
+          | (c, l, col) <- es
+        ]
