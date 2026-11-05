@@ -11,12 +11,20 @@ import Data.Char
 %name parsePattern Pattern
 %tokentype { Token }
 %error { parseError }
+%expect 0
 
 -- lowest precedence first
 -- see https://ocaml.org/manual/5.3/expr.html#ss%3Aprecedence-and-associativity
+-- and see https://github.com/ocaml/ocaml/blob/a76fb1de949d320f35ce29d84d8181a7e2541f22/parsing/parser.mly#L893
 %nonassoc BELOW_COMMA
-%right ';'
-%right ':='
+%nonassoc below_SEMI  -- for SeqExpr -> Expr, so an Expr at the end of a SeqExpr grabs as much as it can
+%nonassoc ';'
+%nonassoc WITH  -- below '|'
+%nonassoc THEN                          -- below ELSE
+%nonassoc ELSE                          -- this forces else to go with closest unmatched then
+%right ':=' '<-'
+%nonassoc below_BAR  -- for PatternMatching -> MatchCase, so a `|` goes to the innermost match
+%left '|'
 %left ','
 %right PREC_OR OR '||'
 %right PREC_AND '&' '&&'
@@ -29,6 +37,8 @@ import Data.Char
 %nonassoc NEGATE_OP -- for prefix negation
 %nonassoc CONSTR_APPLICATION -- for constructors, polymorphic variants, and function applications
 %left HASHOP
+%nonassoc BELOW_DOT -- for module paths followed by a `.`
+%left '.'
 
 %token
       -- literals and identifiers
@@ -260,7 +270,7 @@ ValuePath
   | ModulePath '.' ValueName    { Path (Just $1) $3 }
 
 Constr
-  : ModulePath                  { constrOfPath $1 }
+  : ModulePath %prec BELOW_DOT  { constrOfPath $1 }
 
 Typeconstr
   : TypeconstrName                          { ExtendedPath Nothing $1 }
@@ -318,6 +328,7 @@ AppliedType
 
 AtomicType
   : Typeconstr                          { TypeName $1 }
+  | '_'                                 { TypeExpr }
   | QUOTE LIDENT                        { TypeVariable $2 }
   | '(' TypeExpr ')'                    { $2 }
   | '(' TypeExpr ',' TypeExpr TypeArgumentsTail ')' Typeconstr
@@ -392,8 +403,10 @@ SimplePattern
   | TRUE                                { PatternConstant (ConstantBool True) }
   | FALSE                               { PatternConstant (ConstantBool False) }
   | '(' ')'                             { PatternConstant ConstantUnit }
-  | Constr                              { PatternConstant (ConstantVariant $1) }
-  | BACKTICK TagName                    { PatternConstant (ConstantPolymorphicVariant $2) }
+  -- Prefer an argument when another pattern starts immediately after a
+  -- constructor/tag (e.g. Some Some x), including in function parameters.
+  | Constr %shift                       { PatternConstant (ConstantVariant $1) }
+  | BACKTICK TagName %shift             { PatternConstant (ConstantPolymorphicVariant $2) }
   | '(' Pattern ')'                     { $2 }
   | '(' Pattern ':' TypeExpr ')'        { PatternAnnotated $2 $4 }
   | '[' PatternElements ']'             { PatternList $2 }
@@ -436,9 +449,18 @@ RecordPatternField
 --   AtomExpr   - can be the head of a function application
 --   SimpleExpr - can be an argument (an atom, or a nullary constructor/tag)
 --   Expr       - everything else
+--   SeqExpr    - one+ expressions separated by `;`
 -- Arguments and constructor arguments are SimpleExprs, so that `f a b` can't
 -- be read as `f (a b)`, `(f a) b`, or `f a b`. Also, nullary constructors aren't atoms,
 -- so `C 1` can only be constructor application.
+-- Sequences get their own tier too since `;` also separates lists, arrays, and record items.
+-- thus to avoid ambiguity, we have to break Expr up into SeqExpr and Expr, and we
+-- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
+SeqExpr
+  : Expr %prec below_SEMI     { $1 }
+  | Expr ';'                  { $1 }
+  | Expr ';' SeqExpr          { ExprSequence $1 $3 }
+
 Expr
   : SimpleExpr                { $1 }
   | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
@@ -459,6 +481,22 @@ Expr
   | Expr InfixOp3 Expr   %prec PREC_INFIX3  { ExprInfix $2 $1 $3 }
   | Expr InfixOp4 Expr   %prec PREC_INFIX4  { ExprInfix $2 $1 $3 }
   | Expr HASHOP Expr                     { ExprInfix $2 $1 $3 }
+  -- accessors for records, arrays, and strings
+  | AtomExpr '.' Field              { ExprFieldAccess $1 $3 }
+  | AtomExpr '.' Field '<-' Expr    { ExprFieldAssignment $1 $3 $5 }
+  | AtomExpr '.' '(' SeqExpr ')'              { ExprArrayAccess $1 $4 }
+  | AtomExpr '.' '(' SeqExpr ')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
+  | AtomExpr '.' '[' SeqExpr ']'              { ExprStringAccess $1 $4 }
+  -- no need for the string assignment since that's now deprecated and a syntax error
+  | IF SeqExpr THEN Expr              { ExprIf $2 $4 Nothing }
+  | IF SeqExpr THEN Expr ELSE Expr    { ExprIf $2 $4 (Just $6) }
+  | WHILE SeqExpr DO SeqExpr DONE     { ExprWhile $2 $4 }
+  | FOR ValueName '=' SeqExpr TO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 True }
+  | FOR ValueName '=' SeqExpr DOWNTO SeqExpr DO SeqExpr DONE { ExprFor $2 $4 $6 $8 False }
+  | MATCH SeqExpr WITH opt('|') PatternMatching { ExprMatch $2 $5 }
+  | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
+  | FUN many1(Parameter) opt(ReturnTypeAnnotation) '->' SeqExpr { ExprLambda $2 $3 $5 }
+  | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -470,9 +508,9 @@ AtomExpr
   -- putting prefix here ensures that we get `(!f) x` from `!f x`
   | PREFIX SimpleExpr          { ExprPrefix $1 $2 }
   | ValuePath                  { ExprPath $1 }
-  | '(' Expr ')'               { $2 }
-  | BEGIN Expr END             { $2 }
-  | '(' Expr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
+  | '(' SeqExpr ')'            { $2 }
+  | BEGIN SeqExpr END          { $2 }
+  | '(' SeqExpr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
   | '[' ExprList ']'   { ExprCons $2 }
   | '[|' ExprList '|]' { ExprArray (init $2) }
   | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
@@ -494,11 +532,18 @@ ExprList
   | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
   | Expr               { [$1, ExprConstant ConstantList] }
 
+AnnotatedTypeExpr
+  : ':' TypeExpr { $2 }
+
+-- The unparenthesized arrow ends a function's return type constraint.
+-- Parenthesize an arrow type here: fun x : (int -> int) -> ...
+ReturnTypeAnnotation
+  : ':' TupleType { $2 }
+
 RecordField
   : Field          { RecordField $1 Nothing (ExprPath $1) }
-  | Field ':' TypeExpr { RecordField $1 (Just $3) (ExprPath $1) }
-  | Field '=' Expr     { RecordField $1 Nothing $3 }
-  | Field ':' TypeExpr '=' Expr { RecordField $1 (Just $3) $5 }
+  | Field AnnotatedTypeExpr { RecordField $1 (Just $2) (ExprPath $1) }
+  | Field opt(AnnotatedTypeExpr) '=' Expr { RecordField $1 $2 $4 }
 ExprFieldList
   : RecordField ';' ExprFieldList  { $1 : $3 }
   | RecordField ';'                 { [$1] } -- it's ok to have a trailing `;`
@@ -511,6 +556,29 @@ Argument
   | LABEL SimpleExpr     { LabeledArgument $1 (Just $2) }
   | '?' LIDENT           { OptionalArgument $2 Nothing }
   | OPTLABEL SimpleExpr  { OptionalArgument $1 (Just $2) }
+
+PatternMatching
+  : MatchCase %prec below_BAR      { [$1] }
+  | MatchCase '|' PatternMatching  { $1 : $3 }
+
+MatchCase
+  : Pattern '->' SeqExpr               { ($1, Nothing, $3) }
+  | Pattern WHEN SeqExpr '->' SeqExpr  { ($1, Just $3, $5) }
+
+
+ParameterExpr
+ : '=' SeqExpr { $2 }
+Parameter
+  : Pattern    { ParameterPattern $1}
+  | '~' LIDENT { ParameterLabel $2 Nothing Nothing }
+  | '~' '(' LIDENT ')' { ParameterLabel $3 Nothing Nothing }
+  | '~' '(' LIDENT ':' TypeExpr ')' { ParameterLabel $3 (Just $5) Nothing }
+  | LABEL Pattern { ParameterLabel $1 Nothing (Just $2) }
+  | '?' LIDENT  { ParameterOptional $2 Nothing Nothing }
+  | '?' '(' LIDENT opt(AnnotatedTypeExpr) opt(ParameterExpr) ')'  { ParameterOptional $3 $4 $5 }
+  | OPTLABEL Pattern { optionalPatternParameter $1 $2 }
+  | OPTLABEL '(' Pattern '=' SeqExpr ')' { ParameterOptionalPattern $1 $3 Nothing (Just $5) }
+  | OPTLABEL '(' Pattern ':' TypeExpr '=' SeqExpr ')' { ParameterOptionalPattern $1 $3 (Just $5) (Just $7) }
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
@@ -534,12 +602,12 @@ ModuleItems
 
 ModuleItem
   : Definition        { [Definition] }
-  | ';;' Expr         { [Expr $2] }
+  | ';;' SeqExpr      { [Expr $2] }
   | ';;'              { [] }
 
 DefinitionOrExpr 
   : Definition        { Definition }
-  | Expr              { Expr $1 }
+  | SeqExpr           { Expr $1 }
 
 -- TODO: use actual definitions
 Definition 
@@ -589,6 +657,12 @@ pathName :: Path -> String
 pathName (Path _ n) = n
 
 negativeInt :: IntLiteral -> IntLiteral
-negativeInt n = n { value = negate (value n) }
+negativeInt n = n { Tokens.value = negate (Tokens.value n) }
+
+-- The annotation on a parenthesized optional pattern belongs to the
+-- parameter, rather than becoming another PatternAnnotated node.
+optionalPatternParameter :: String -> Pattern -> Parameter
+optionalPatternParameter name (PatternAnnotated pat typ) = ParameterOptionalPattern name pat (Just typ) Nothing
+optionalPatternParameter name pat = ParameterOptionalPattern name pat Nothing Nothing
 
 }

@@ -218,11 +218,26 @@ data AlexUserState = AlexUserState
   , commentActive   :: Maybe CommentState
   }
 
+-- used in all of our internal actions
+-- this allows us to easily return a token or an error
+-- and easily combine those results
+-- we do this instead of alexError because alexError takes only a single string
+data InternalDriverResult = 
+  NormalDriverResult (Either String Token) -- either an error or a token
+  | EndOfInputDriverResult (Maybe String) -- maybe an error
+  deriving (Show, Eq)
+
+returnDriverResult :: Token -> Alex InternalDriverResult
+returnDriverResult = return . NormalDriverResult . Right
+
+failDriverResult :: String -> Alex InternalDriverResult
+failDriverResult = return . NormalDriverResult . Left
+
 alexInitUserState :: AlexUserState
 alexInitUserState = AlexUserState Nothing Nothing Nothing
 
 -- delimited strings
-enterDelimitedString :: AlexAction Token
+enterDelimitedString :: AlexAction InternalDriverResult
 enterDelimitedString (_, _, _, s) len = do
   userState <- alexGetUserState
   let delim = tail (take (len - 1) s)
@@ -236,7 +251,7 @@ isEndOfDelimitedString userState (_, _, _, s) len _ =
   tail (take (len - 1) s) == delimiter (fromJust (delimitedString userState))
 
 -- since we take one character at a time, we can just concatenate
-nextDelimitedStringChar :: AlexAction Token
+nextDelimitedStringChar :: AlexAction InternalDriverResult
 nextDelimitedStringChar (_, _, _, s) _ = do
   userState <- alexGetUserState
   let stringState = fromJust (delimitedString userState)
@@ -245,16 +260,16 @@ nextDelimitedStringChar (_, _, _, s) _ = do
   })
   scanToken
 
-exitDelimitedString :: AlexAction Token
+exitDelimitedString :: AlexAction InternalDriverResult
 exitDelimitedString _ _ = do
   userState <- alexGetUserState
   let stringState = fromJust (delimitedString userState)
   alexSetUserState (userState { delimitedString = Nothing })
   alexSetStartCode 0
-  return (TokenString (reverse (delimitedReversed stringState)))
+  returnDriverResult (TokenString (reverse (delimitedReversed stringState)))
 
 -- quoted strings
-enterQuotedString :: AlexAction Token
+enterQuotedString :: AlexAction InternalDriverResult
 enterQuotedString _ _ = do
   userState <- alexGetUserState
   let state = Just (QuotedStringState { quotedReversed = "" })
@@ -262,7 +277,7 @@ enterQuotedString _ _ = do
   alexSetStartCode quoted
   scanToken
 
-nextQuotedStringChar :: AlexAction Token
+nextQuotedStringChar :: AlexAction InternalDriverResult
 nextQuotedStringChar (_, _, _, s) len = do
   userState <- alexGetUserState
   let stringState = fromJust (quotedString userState)
@@ -271,7 +286,7 @@ nextQuotedStringChar (_, _, _, s) len = do
   })
   scanToken
 
-nextQuotedStringUnicodeChar :: AlexAction Token
+nextQuotedStringUnicodeChar :: AlexAction InternalDriverResult
 nextQuotedStringUnicodeChar (_, _, _, s) len = do
   userState <- alexGetUserState
   let stringState = fromJust (quotedString userState)
@@ -280,16 +295,16 @@ nextQuotedStringUnicodeChar (_, _, _, s) len = do
   })
   scanToken
 
-exitQuotedString :: AlexAction Token
+exitQuotedString :: AlexAction InternalDriverResult
 exitQuotedString _ _ = do
   userState <- alexGetUserState
   let stringState = fromJust (quotedString userState)
   alexSetUserState (userState { quotedString = Nothing })
   alexSetStartCode 0
-  return (TokenString (reverse (quotedReversed stringState)))
+  returnDriverResult (TokenString (reverse (quotedReversed stringState)))
 
 -- comments
-enterComment :: AlexAction Token
+enterComment :: AlexAction InternalDriverResult
 enterComment _ _ = do 
   userState <- alexGetUserState
   let state = Just (CommentState { commentDepth = 1 })
@@ -297,7 +312,7 @@ enterComment _ _ = do
   alexSetStartCode comment
   scanToken
 
-openNestedComment :: AlexAction Token
+openNestedComment :: AlexAction InternalDriverResult
 openNestedComment _ _ = do
   userState <- alexGetUserState
   let commentState = fromJust (commentActive userState)
@@ -306,7 +321,7 @@ openNestedComment _ _ = do
   })
   scanToken
 
-closeNestedComment :: AlexAction Token
+closeNestedComment :: AlexAction InternalDriverResult
 closeNestedComment _ _ = do
   userState <- alexGetUserState
   let commentState = fromJust (commentActive userState)
@@ -319,28 +334,39 @@ closeNestedComment _ _ = do
     alexSetStartCode 0
   scanToken
 
-regularToken :: (String -> Token) -> AlexAction Token
-regularToken f = \(_, _, _, s) len -> return (f (take len s))
+regularToken :: (String -> Token) -> AlexAction InternalDriverResult
+regularToken f = \(_, _, _, s) len -> returnDriverResult $ f (take len s)
 
-alexEOF :: Alex Token
+
+alexEOF :: Alex InternalDriverResult
 alexEOF = do
   userState <- alexGetUserState
   case (delimitedString userState, quotedString userState, commentActive userState) of
-    (Just _, _, _)        -> alexError $ "unterminated string literal; did not find matching |" ++ delimiter (fromJust (delimitedString userState)) ++ "}"
-    (_, Just _, _)        -> alexError "unterminated string literal; no matching closing quote found"
-    (_, _, Just _)        -> alexError "unterminated comment; no matching closing comment found"
-    (Nothing, Nothing, Nothing) -> return TokenEOF
+    (Just _, _, _)        -> return $ EndOfInputDriverResult $ Just $ "unterminated string literal; did not find matching |" ++ delimiter (fromJust (delimitedString userState)) ++ "}"
+    (_, Just _, _)        -> return $ EndOfInputDriverResult $ Just $ "unterminated string literal; no matching closing quote found"
+    (_, _, Just _)        -> return $ EndOfInputDriverResult $ Just $ "unterminated comment; no matching closing comment found"
+    (Nothing, Nothing, Nothing) -> return $ EndOfInputDriverResult Nothing
+
+-- advance past exactly one character
+skipChar :: AlexInput -> AlexInput
+skipChar inp@(_, _, _, [])  = inp
+skipChar (pos, _, _, c:cs)    = (alexMove pos c, c, [], cs)
 
 -- similar to alexMonadScan, but calls alexScanUser instead of just alexScan
-scanToken :: Alex Token
+scanToken :: Alex InternalDriverResult
 scanToken = do
-  inp <- alexGetInput
+  inp <- alexGetInput -- input before we consume any characters
   sc  <- alexGetStartCode
   us  <- alexGetUserState
   case alexScanUser us inp sc of
     AlexEOF -> alexEOF
-    AlexError ((AlexPn _ line col), _, _, _) ->
-      alexError ("Unexpected token at line " ++ show line ++ ", column " ++ show col)
+    AlexError _ -> do
+      -- since this comes from before we consumed any characters, 
+      -- we know the first character in the input is the one that caused the error
+      let ((AlexPn _ line col), _, _, input) = inp  
+      let errorChar = head input
+      alexSetInput (skipChar inp)  -- advance past the error character
+      failDriverResult $ "Unexpected token " ++ [ errorChar ] ++ " at line " ++ show line ++ ", column " ++ show col
     AlexSkip inp' _ -> alexSetInput inp' >> scanToken
     AlexToken inp' len action -> do
       alexSetInput inp'
@@ -348,11 +374,25 @@ scanToken = do
 
 -- driver
 alexScanTokens :: String -> Either String [Token]
-alexScanTokens source = runAlex source loop
-  where
-    loop = do
-      tok <- scanToken
-      case tok of
-        TokenEOF -> return []
-        _        -> (tok :) <$> loop
+alexScanTokens source = 
+  -- loop will return [String] [Token]
+  -- where [String] is the list of errors
+  let loop = do
+        tok <- scanToken
+        case tok of
+          NormalDriverResult v -> do
+            (errors, tokens) <- loop
+            case v of
+              Left err -> return (err : errors, tokens)
+              Right t  -> return (errors, t : tokens)
+          EndOfInputDriverResult v -> 
+            case v of
+              Just err -> return ([err], [])
+              Nothing  -> return ([], [])
+  in case runAlex source loop of
+    Left _ -> error "unreachable"
+    Right (errors, tokens) ->
+      case errors of
+        [] -> Right tokens
+        _  -> Left (unlines errors)
 }
