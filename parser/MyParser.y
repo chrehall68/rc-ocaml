@@ -332,6 +332,8 @@ LiteralConstant
 Pattern : LiteralConstant { PatternConstant $1 }
 TypeExpr
   : '_'             { TypeExpr }
+PolyTypeExpr
+  : '}'             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -390,7 +392,12 @@ Expr
 
 LetBinding
   : Pattern '=' Expr { LetBindingPattern $1 $3 }
-  | ValueName many(Parameter) opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 $2 $3 $4 $6 }
+  | ValueName many1(Parameter) opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 $2 $3 $4 $6 }
+  | ValueName opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 [] $2 $3 $5 }
+  -- TODO: use poly type expr here once that poly type expr's get implemented
+  -- but since that would cause shift reduce conflicts, we should only use the 'a 'b ... branch
+  -- of poly type expr
+  | ValueName ':' PolyTypeExpr '=' SeqExpr { LetBindingTyped $1 [] (Just $3) Nothing $5 }
 
 LetBindingAnd
   : AND LetBinding { $2 }
