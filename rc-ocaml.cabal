@@ -94,6 +94,18 @@ library intermediate
   -- Base language which the package is written in.
   default-language: Haskell2010
 
+library backend
+  import: warnings
+  exposed-modules: Backend.Jasmin
+  build-depends:
+    base ^>=4.20.2.0,
+    containers,
+    mtl,
+    rc-ocaml:frontend,
+    rc-ocaml:intermediate,
+  hs-source-dirs: backend/src
+  default-language: Haskell2010
+
 executable rc-ocaml
   -- Import common warning flags.
   import: warnings
