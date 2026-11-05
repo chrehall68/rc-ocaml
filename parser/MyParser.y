@@ -348,8 +348,8 @@ LiteralConstant
   | '[|' '|]'            { ConstantArray }
 
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
--- Each tier follows the OCaml precedence table: constructors and lazy bind
--- tighter than ::, which binds tighter than tuples, |, and finally as.
+-- Each tier follows the OCaml precedence table: lazy binds tighter than
+-- constructor/tag application, which binds tighter than ::, tuples, |, and as.
 Pattern
   : OrPattern                           { $1 }
   | OrPattern AS ValueName              { PatternAlias $1 $3 }
@@ -373,10 +373,10 @@ ConsPattern
 
 AppliedPattern
   : SimplePattern                       { $1 }
-  | Constr SimplePattern                { PatternVariant $1 $2 }
-  | BACKTICK TagName SimplePattern      { PatternPolymorphicVariant $2 $3 }
+  | Constr AppliedPattern               { PatternVariant $1 $2 }
+  | BACKTICK TagName AppliedPattern     { PatternPolymorphicVariant $2 $3 }
   | '#' Typeconstr                      { PatternType $2 }
-  | LAZY AppliedPattern                 { PatternLazy $2 }
+  | LAZY SimplePattern                  { PatternLazy $2 }
   | EXCEPTION AppliedPattern            { PatternException $2 }
 
 SimplePattern
@@ -399,6 +399,7 @@ SimplePattern
   | '[' PatternElements ']'             { PatternList $2 }
   | '[|' PatternElements '|]'           { PatternArray $2 }
   | '{' RecordPatternFields '}'         { PatternRecord (fst $2) (snd $2) }
+  | ModulePath '.' '(' ')'              { PatternLocalOpen $1 (PatternConstant ConstantUnit) }
   | ModulePath '.' '(' Pattern ')'      { PatternLocalOpen $1 $4 }
   | ModulePath '.' '[' PatternElements ']'  { PatternLocalOpen $1 (PatternList $4) }
   | ModulePath '.' '[|' PatternElements '|]' { PatternLocalOpen $1 (PatternArray $4) }

@@ -61,6 +61,30 @@ spec = do
         `shouldBe` Right
           (PatternVariant (Path Nothing "Some") (PatternVariant (Path Nothing "Some") (int 1)))
       pat "`Value x" `shouldBe` Right (PatternPolymorphicVariant "Value" (name "x"))
+    it "parses nested constructor and tag applications without parentheses" $ do
+      pat "Some Some x"
+        `shouldBe` Right
+          (PatternVariant (Path Nothing "Some")
+            (PatternVariant (Path Nothing "Some") (name "x")))
+      pat "`Outer `Inner x"
+        `shouldBe` Right
+          (PatternPolymorphicVariant "Outer" (PatternPolymorphicVariant "Inner" (name "x")))
+      pat "Some `Tag x"
+        `shouldBe` Right
+          (PatternVariant (Path Nothing "Some") (PatternPolymorphicVariant "Tag" (name "x")))
+      pat "`Tag Some x"
+        `shouldBe` Right
+          (PatternPolymorphicVariant "Tag" (PatternVariant (Path Nothing "Some") (name "x")))
+    it "parses constructors containing lazy and type patterns" $ do
+      pat "Some lazy x"
+        `shouldBe` Right
+          (PatternVariant (Path Nothing "Some") (PatternLazy (name "x")))
+      pat "Some #t"
+        `shouldBe` Right
+          (PatternVariant (Path Nothing "Some") (PatternType (ExtendedPath Nothing "t")))
+      pat "`Tag lazy x"
+        `shouldBe` Right
+          (PatternPolymorphicVariant "Tag" (PatternLazy (name "x")))
     it "makes :: right associative" $
       pat "x :: y :: xs"
         `shouldBe` Right (PatternCons (name "x") (PatternCons (name "y") (name "xs")))
@@ -79,10 +103,14 @@ spec = do
       pat "(A | B) as choice"
         `shouldBe` Right (PatternAlias (PatternOr (variant "A") (variant "B")) "choice")
     it "parses lazy and exception patterns" $ do
-      pat "lazy Some x"
+      pat "lazy (Some x)"
         `shouldBe` Right (PatternLazy (PatternVariant (Path Nothing "Some") (name "x")))
+      pat "Some (lazy x)"
+        `shouldBe` Right (PatternVariant (Path Nothing "Some") (PatternLazy (name "x")))
       pat "exception Failure msg"
         `shouldBe` Right (PatternException (PatternVariant (Path Nothing "Failure") (name "msg")))
+    it "rejects a lazy constructor application without parentheses" $
+      pat "lazy Some x" `shouldSatisfy` isLeft
 
   describe "collections and records" $ do
     it "parses lists and arrays including empty and trailing semicolons" $ do
@@ -119,6 +147,9 @@ spec = do
         `shouldBe` Right (PatternRecord
           [PatternField (Path (Just (ModulePath ["M"])) "x") (Just (typeName "int")) (name "x")] False)
     it "parses local module opens with each container" $ do
+      pat "M.()"
+        `shouldBe` Right
+          (PatternLocalOpen (ModulePath ["M"]) (PatternConstant ConstantUnit))
       pat "M.(Some x)"
         `shouldBe` Right (PatternLocalOpen (ModulePath ["M"]) (PatternVariant (Path Nothing "Some") (name "x")))
       pat "M.[x]"
