@@ -4,6 +4,7 @@ module MyParser where
 import Ast
 import Tokens
 import Data.Char
+import Data.Maybe
 }
 
 %monad { ParseResult } { (>>=) } { return }
@@ -329,7 +330,7 @@ LiteralConstant
 -- 11.6 Patterns (https://ocaml.org/manual/5.3/patterns.html)
 -- TODO: fill out this section
 Pattern : LiteralConstant { PatternConstant $1 }
-TypeExpr 
+TypeExpr
   : '_'             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
@@ -385,6 +386,14 @@ Expr
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
   | FUN many1(Parameter) opt(AnnotatedTypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
   | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
+  | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) $3 $4 $6 }
+
+LetBinding
+  : Pattern '=' Expr { LetBindingPattern $1 $3 }
+  | ValueName many(Parameter) opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 $2 $3 $4 $6 }
+
+LetBindingAnd
+  : AND LetBinding { $2 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -422,6 +431,10 @@ ExprList
 
 AnnotatedTypeExpr
   : ':' TypeExpr { $2 }
+
+AnnotatedTypeCoersionExpr
+  : ':>' TypeExpr { $2 }
+
 RecordField
   : Field          { RecordField $1 Nothing (ExprPath $1) }
   | Field AnnotatedTypeExpr { RecordField $1 (Just $2) (ExprPath $1) }
@@ -482,17 +495,17 @@ ModuleItems
   : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
 
 ModuleItem
-  : Definition        { [Definition] }
-  | ';;' SeqExpr      { [Expr $2] }
+--  : Definition        { [Definition] }
+  : ';;' SeqExpr      { [Expr $2] }
   | ';;'              { [] }
 
-DefinitionOrExpr 
-  : Definition        { Definition }
-  | SeqExpr           { Expr $1 }
+DefinitionOrExpr
+--  : Definition        { Definition }
+  : SeqExpr           { Expr $1 }
 
 -- TODO: use actual definitions
-Definition 
-  : LET                  {  }
+--Definition { }
+--  : LET                  {  }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
@@ -502,7 +515,7 @@ Program
 
 -- UnitInterface : many(Specification opt(';;'))             { $1 }
 UnitInterface :                               { UnitInterface }
- 
+
 UnitImplementation : opt(ModuleItems)         { UnitImplementation $1 }
 
 
