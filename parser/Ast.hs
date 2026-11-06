@@ -92,7 +92,7 @@ data Expr
   | ExprFunction {cases :: [(Pattern, Maybe Expr, Expr)]}
   | ExprLambda {parameters :: [Parameter], typeConstraint :: Maybe TypeExpr, body :: Expr}
   | ExprTry {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
-  | ExprLet {isRec :: Bool, letBinding :: LetBinding, additionalLets :: [LetBinding], expr :: Expr}
+  | ExprLet {isRec :: Bool, letBindings :: [LetBinding], expr :: Expr}
   deriving (Show, Eq)
 
 data LetBinding

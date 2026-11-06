@@ -388,7 +388,7 @@ Expr
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
   | FUN many1(Parameter) opt(AnnotatedTypeExpr) '->' SeqExpr { ExprLambda $2 $3 $5 }
   | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
-  | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) $3 $4 $6 }
+  | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) ($3:$4) $6 }
 
 LetBinding
   : Pattern '=' Expr { LetBindingPattern $1 $3 }
