@@ -2,7 +2,7 @@ module Backend.Jasmin (generateJasmin) where
 
 import Control.Monad (foldM, unless, when)
 import Control.Monad.State.Strict (StateT, lift, runStateT)
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, ord)
 import Frontend.Ast (Constant (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.Type (Type (..))
@@ -53,13 +53,15 @@ instance Monoid Code where
 instruction :: Int -> String -> Code
 instruction change name = Code change (max 0 change) (("  " ++ name) :)
 
-data ValueKind = UnitValue | IntValue | LongValue
+data ValueKind = UnitValue | IntValue | LongValue | DoubleValue
 
 kind :: Type -> Emit ValueKind
 kind ty = case ty of
   TUnit -> pure UnitValue
   TInt -> pure LongValue
   TBool -> pure IntValue
+  TChar -> pure IntValue
+  TDouble -> pure DoubleValue
   _ -> reject ("JVM representation for " ++ show ty)
 
 width :: ValueKind -> Int
@@ -67,6 +69,7 @@ width valueKind = case valueKind of
   UnitValue -> 0
   IntValue -> 1
   LongValue -> 2
+  DoubleValue -> 2
 
 type Env = ()
 
@@ -103,7 +106,24 @@ emitDiscarded env expression = do
 emitExpr :: Env -> TExpr Type -> Emit Code
 emitExpr _ expression = case expression of
   TEConstant ty constant -> emitConstant ty constant
-  _ -> reject "expressions other than primitive constants"
+  TEVar {} -> reject "variables"
+  TEApply {} -> reject "function application"
+  TELet {} -> reject "local bindings"
+  TESequence {} -> reject "sequences"
+  TEIf {} -> reject "conditionals"
+  TEWhile {} -> reject "while loops"
+  TEFor {} -> reject "for loops"
+  TEVariant {} -> reject "variants"
+  TEPolymorphicVariant {} -> reject "polymorphic variants"
+  TETuple {} -> reject "tuples"
+  TECons {} -> reject "lists"
+  TEArray {} -> reject "arrays"
+  TERecord {} -> reject "records"
+  TEFieldAccess {} -> reject "record field access"
+  TEFieldAssignment {} -> reject "record field assignment"
+  TEMatch {} -> reject "pattern matching"
+  TEFunction {} -> reject "function values"
+  TETry {} -> reject "exception handling"
 
 emitConstant :: Type -> Constant -> Emit Code
 emitConstant ty constant = case constant of
@@ -113,13 +133,29 @@ emitConstant ty constant = case constant of
       lift (Left ("Integer outside signed 63-bit range: " ++ show n))
     literal TInt 2 (show n ++ "L")
   ConstantInt _ -> reject "integer literals with an explicit size suffix"
+  ConstantDouble number
+    | isNaN number -> floatingDivision "dconst_0" "dconst_0"
+    | isInfinite number -> do
+        code <- floatingDivision "dconst_1" "dconst_0"
+        pure (code <> if number < 0 then instruction 0 "dneg" else mempty)
+    | otherwise -> literal TDouble 2 (show number)
+  ConstantChar character
+    | ord character <= 255 -> literal TChar 1 (show (ord character))
+    | otherwise -> reject "character literals outside the OCaml byte range"
+  ConstantString _ -> reject "string literals"
   ConstantBool boolean -> do
     requireType TBool ty
     pure (instruction 1 (if boolean then "iconst_1" else "iconst_0"))
   ConstantUnit -> requireType TUnit ty >> pure mempty
-  _ -> reject "constants other than int, bool, and unit"
+  ConstantList -> reject "list literals"
+  ConstantArray -> reject "array literals"
+  ConstantVariant _ -> reject "variant constants"
+  ConstantPolymorphicVariant _ -> reject "polymorphic variant constants"
   where
     literal expected slots operand = do
       requireType expected ty
       let opcode = if slots == 2 then "ldc2_w " else "ldc "
       pure (instruction slots (opcode ++ operand))
+    floatingDivision numerator denominator = do
+      requireType TDouble ty
+      pure (instruction 2 numerator <> instruction 2 denominator <> instruction (-2) "ddiv")
