@@ -1,9 +1,10 @@
 module Backend.Jasmin (generateJasmin) where
 
 import Control.Monad (foldM, unless, when)
-import Control.Monad.State.Strict (StateT, lift, runStateT)
+import Control.Monad.State.Strict (StateT, get, lift, put, runStateT)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, ord)
-import Frontend.Ast (Constant (..))
+import qualified Data.Map.Strict as Map
+import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.Type (Type (..))
 import Intermediate.TypedAst
@@ -14,7 +15,7 @@ import Intermediate.TypedAst
 generateJasmin :: String -> TProgram Type -> Either String String
 generateJasmin className (TProgram definitions) = do
   unless (validClassName className) $ Left ("Invalid JVM class name " ++ show className)
-  ((_, code), finalState) <- runStateT (foldM emitDefinition ((), mempty) definitions) (Supply 1)
+  ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1)
   let locals = nextLocal finalState
   when (locals > 65535 || peak code > 65535) $ Left "JVM method exceeds the stack or locals limit"
   pure $ unlines $
@@ -71,7 +72,8 @@ width valueKind = case valueKind of
   LongValue -> 2
   DoubleValue -> 2
 
-type Env = ()
+data Local = Local Type ValueKind Int
+type Env = Map.Map String Local
 
 newtype Supply = Supply {nextLocal :: Int}
 type Emit = StateT Supply (Either String)
@@ -83,19 +85,47 @@ requireType :: Type -> Type -> Emit ()
 requireType expected actual = unless (expected == actual) $
   lift (Left ("Expected " ++ show expected ++ " but received " ++ show actual ++ " in lowered AST"))
 
+freshLocal :: Type -> Emit Local
+freshLocal ty = do
+  valueKind <- kind ty
+  supply <- get
+  let slot = nextLocal supply
+  put supply {nextLocal = slot + width valueKind}
+  pure (Local ty valueKind slot)
+
 discard :: ValueKind -> Code
 discard valueKind = case width valueKind of
   0 -> mempty
   1 -> instruction (-1) "pop"
   _ -> instruction (-2) "pop2"
 
+access :: String -> Int -> Local -> Code
+access operation direction (Local _ valueKind slot) =
+  let op prefix = instruction (direction * width valueKind) (prefix : operation ++ " " ++ show slot)
+   in case valueKind of
+        UnitValue -> mempty
+        IntValue -> op 'i'
+        LongValue -> op 'l'
+        DoubleValue -> op 'd'
+
 emitDefinition :: (Env, Code) -> TDefinition Type -> Emit (Env, Code)
 emitDefinition (env, code) definition = case definition of
   TDefinitionType _ -> pure (env, code)
-  TDefinitionLet {} -> reject "top-level bindings"
+  TDefinitionLet recursive bindings -> do
+    (newEnv, bindingCode) <- emitBindings env recursive bindings
+    pure (newEnv, code <> bindingCode)
   TDefinitionExpr expression -> do
     expressionCode <- emitDiscarded env expression
     pure (env, code <> expressionCode)
+
+emitBindings :: Env -> Bool -> [TLetBinding Type] -> Emit (Env, Code)
+emitBindings _ True _ = reject "recursive bindings"
+emitBindings env False [TLetBinding (TPVariable ty name) rhs] = do
+  requireType ty (exprAnnotation rhs)
+  rhsCode <- emitExpr env rhs
+  local <- freshLocal ty
+  pure (Map.insert name local env, rhsCode <> access "store" (-1) local)
+emitBindings _ False _ = reject "binding groups and patterns other than a variable"
 
 emitDiscarded :: Env -> TExpr Type -> Emit Code
 emitDiscarded env expression = do
@@ -104,9 +134,14 @@ emitDiscarded env expression = do
   pure (code <> discard valueKind)
 
 emitExpr :: Env -> TExpr Type -> Emit Code
-emitExpr _ expression = case expression of
+emitExpr env expression = case expression of
   TEConstant ty constant -> emitConstant ty constant
-  TEVar {} -> reject "variables"
+  TEVar ty (Path Nothing name) -> case Map.lookup name env of
+    Just local@(Local boundType _ _) -> do
+      requireType ty boundType
+      pure (access "load" 1 local)
+    Nothing -> reject ("unbound or first-class value " ++ show name)
+  TEVar _ _ -> reject "module-qualified values"
   TEApply {} -> reject "function application"
   TELet {} -> reject "local bindings"
   TESequence {} -> reject "sequences"
