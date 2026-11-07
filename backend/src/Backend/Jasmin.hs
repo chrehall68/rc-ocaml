@@ -142,6 +142,11 @@ emitDiscarded env expression = do
   valueKind <- kind (exprAnnotation expression)
   pure (code <> discard valueKind)
 
+emitExpected :: Env -> Type -> TExpr Type -> Emit Code
+emitExpected env ty expression = do
+  requireType ty (exprAnnotation expression)
+  emitExpr env expression
+
 emitExpr :: Env -> TExpr Type -> Emit Code
 emitExpr env expression = case expression of
   TEConstant ty constant -> emitConstant ty constant
@@ -152,8 +157,12 @@ emitExpr env expression = case expression of
     Nothing -> reject ("unbound or first-class value " ++ show name)
   TEVar _ _ -> reject "module-qualified values"
   TEApply {} -> reject "function application"
-  TELet {} -> reject "local bindings"
-  TESequence {} -> reject "sequences"
+  TELet ty recursive bindings body -> do
+    (newEnv, bindingsCode) <- emitBindings env recursive bindings
+    bodyCode <- emitExpected newEnv ty body
+    pure (bindingsCode <> bodyCode)
+  TESequence ty first second ->
+    (<>) <$> emitDiscarded env first <*> emitExpected env ty second
   TEIf {} -> reject "conditionals"
   TEWhile {} -> reject "while loops"
   TEFor {} -> reject "for loops"
