@@ -119,13 +119,22 @@ emitDefinition (env, code) definition = case definition of
     pure (env, code <> expressionCode)
 
 emitBindings :: Env -> Bool -> [TLetBinding Type] -> Emit (Env, Code)
-emitBindings _ True _ = reject "recursive bindings"
-emitBindings env False [TLetBinding (TPVariable ty name) rhs] = do
-  requireType ty (exprAnnotation rhs)
-  rhsCode <- emitExpr env rhs
-  local <- freshLocal ty
-  pure (Map.insert name local env, rhsCode <> access "store" (-1) local)
-emitBindings _ False _ = reject "binding groups and patterns other than a variable"
+emitBindings env recursive bindings = do
+  when recursive $ reject "recursive bindings"
+  -- A parallel let group evaluates its RHSs in the original environment.
+  foldM bind (env, mempty) bindings
+  where
+    bind (newEnv, code) (TLetBinding pat rhs) = case pat of
+      TPVariable ty name -> do
+        requireType ty (exprAnnotation rhs)
+        rhsCode <- emitExpr env rhs
+        local <- freshLocal ty
+        pure (Map.insert name local newEnv, code <> rhsCode <> access "store" (-1) local)
+      TPWildcard ty -> do
+        requireType ty (exprAnnotation rhs)
+        rhsCode <- emitDiscarded env rhs
+        pure (newEnv, code <> rhsCode)
+      _ -> reject "destructuring bindings"
 
 emitDiscarded :: Env -> TExpr Type -> Emit Code
 emitDiscarded env expression = do
