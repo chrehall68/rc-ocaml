@@ -702,11 +702,80 @@ spec = do
     it "rejects a ; after a type annotation" $
       parseExpr "(a : _;)" `shouldSatisfy` isLeft
 
+  describe "patterns integrated with expressions" $ do
+    let con name = Path Nothing name
+        simpleCon name = PatternConstant (ConstantVariant (con name))
+    it "uses nested constructor patterns in function cases" $
+      parseExpr "function Some Some x -> x | None -> fallback"
+        `shouldBe` Right
+          (ExprFunction {cases =
+            [ (PatternVariant (con "Some") (PatternVariant (con "Some") (PatternVariable "x")), Nothing, var "x"),
+              (simpleCon "None", Nothing, var "fallback")
+            ]})
+    it "distinguishes or-patterns from case separators" $
+      parseExpr "match x with A | B -> left | C -> right"
+        `shouldBe` Right
+          (ExprMatch {expr = var "x", cases =
+            [ (PatternOr (simpleCon "A") (simpleCon "B"), Nothing, var "left"),
+              (simpleCon "C", Nothing, var "right")
+            ]})
+    it "parses collection patterns in match cases" $
+      parseExpr "match xs with x :: rest -> x | [] -> empty"
+        `shouldBe` Right
+          (ExprMatch {expr = var "xs", cases =
+            [ (PatternCons (PatternVariable "x") (PatternVariable "rest"), Nothing, var "x"),
+              (PatternList [], Nothing, var "empty")
+            ]})
+    it "parses constructed exception handlers" $
+      parseExpr "try e with Failure msg -> msg | _ -> e"
+        `shouldBe` Right
+          (ExprTry {expr = var "e", cases =
+            [ (PatternVariant (con "Failure") (PatternVariable "msg"), Nothing, var "msg"),
+              (PatternWildcard, Nothing, var "e")
+            ]})
+    it "keeps constructor patterns and later lambda parameters distinct" $
+      parseExpr "fun Some x y -> y"
+        `shouldBe` Right
+          (ExprLambda
+            { parameters =
+                [ ParameterPattern (PatternVariant (con "Some") (PatternVariable "x")),
+                  ParameterPattern (PatternVariable "y")
+                ],
+              typeConstraint = Nothing,
+              body = var "y"
+            })
+    it "preserves labeled and optional parameter types and defaults" $ do
+      parseExpr "fun ~x:(Some y) -> y"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterLabel "x" Nothing (Just (PatternVariant (con "Some") (PatternVariable "y")))], typeConstraint = Nothing, body = var "y"})
+      parseExpr "fun ?x:(v : t) -> v"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterOptionalPattern "x" (PatternVariable "v") (Just (TypeName (ExtendedPath Nothing "t"))) Nothing], typeConstraint = Nothing, body = var "v"})
+      parseExpr "fun ?x:(Some y : t = default) -> y"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterOptionalPattern "x" (PatternVariant (con "Some") (PatternVariable "y")) (Just (TypeName (ExtendedPath Nothing "t"))) (Just (var "default"))], typeConstraint = Nothing, body = var "y"})
+    it "keeps function return type arrows separate from the body delimiter" $ do
+      parseExpr "fun x : int -> x"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterPattern (PatternVariable "x")], typeConstraint = Just (TypeName (ExtendedPath Nothing "int")), body = var "x"})
+      parseExpr "fun x : (int -> int) -> x"
+        `shouldBe` Right
+          (ExprLambda {parameters = [ParameterPattern (PatternVariable "x")], typeConstraint = Just (TypeArrow (TypeName (ExtendedPath Nothing "int")) (TypeName (ExtendedPath Nothing "int"))), body = var "x"})
+
   describe "type annotations" $ do
     it "parses the _ placeholder type" $
       parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExpr})
-    it "has no other type expressions yet" $
-      parseExpr "(x : t)" `shouldSatisfy` isLeft
+    it "parses named type annotations" $
+      parseExpr "(x : t)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeName (ExtendedPath Nothing "t")})
+    it "parses polymorphic function annotations" $
+      parseExpr "(x : 'a list -> bool)"
+        `shouldBe` Right
+          (ExprAnnotated
+            { expr = var "x",
+              typeExpr = TypeArrow
+                (TypeApplication [TypeVariable "a"] (ExtendedPath Nothing "list"))
+                (TypeName (ExtendedPath Nothing "bool"))
+            })
   where
     isLeft (Left _) = True
     isLeft _ = False
