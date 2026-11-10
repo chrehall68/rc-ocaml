@@ -122,6 +122,12 @@ data Expr
   | ExprFunction {cases :: [(Pattern, Maybe Expr, Expr)]}
   | ExprLambda {parameters :: [Parameter], typeConstraint :: Maybe TypeExpr, body :: Expr}
   | ExprTry {expr :: Expr, cases :: [(Pattern, Maybe Expr, Expr)]}
+  | ExprLet {isRec :: Bool, letBindings :: [LetBinding], expr :: Expr}
+  deriving (Show, Eq)
+
+data LetBinding
+  = LetBindingPattern {pat :: Pattern, expr1 :: Expr}
+  | LetBindingTyped {letValueName :: String, params :: [Parameter], typeExpression :: Maybe TypeExpr, coercedType :: Maybe TypeExpr, expr1 :: Expr}
   deriving (Show, Eq)
 
 data DefinitionOrExpr

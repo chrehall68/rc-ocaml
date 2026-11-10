@@ -4,6 +4,7 @@ module MyParser where
 import Ast
 import Tokens
 import Data.Char
+import Data.Maybe
 }
 
 %monad { ParseResult } { (>>=) } { return }
@@ -443,6 +444,10 @@ RecordPatternField
   | Field ':' TypeExpr                  { PatternField $1 (Just $3) (PatternVariable (pathName $1)) }
   | Field '=' Pattern                   { PatternField $1 Nothing $3 }
   | Field ':' TypeExpr '=' Pattern      { PatternField $1 (Just $3) $5 }
+-- TODO: fill out this section
+Pattern : LiteralConstant { PatternConstant $1 }
+PolyTypeExpr
+  : '}'             { TypeExpr }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -497,6 +502,19 @@ Expr
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
   | FUN many1(Parameter) opt(ReturnTypeAnnotation) '->' SeqExpr { ExprLambda $2 $3 $5 }
   | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
+  | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) ($3:$4) $6 }
+
+LetBinding
+  : Pattern '=' Expr { LetBindingPattern $1 $3 }
+  | ValueName many1(Parameter) opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 $2 $3 $4 $6 }
+  | ValueName opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 [] $2 $3 $5 }
+  -- TODO: use poly type expr here once that poly type expr's get implemented
+  -- but since that would cause shift reduce conflicts, we should only use the 'a 'b ... branch
+  -- of poly type expr
+  | ValueName ':' PolyTypeExpr '=' SeqExpr { LetBindingTyped $1 [] (Just $3) Nothing $5 }
+
+LetBindingAnd
+  : AND LetBinding { $2 }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -539,6 +557,8 @@ AnnotatedTypeExpr
 -- Parenthesize an arrow type here: fun x : (int -> int) -> ...
 ReturnTypeAnnotation
   : ':' TupleType { $2 }
+AnnotatedTypeCoersionExpr
+  : ':>' TypeExpr { $2 }
 
 RecordField
   : Field          { RecordField $1 Nothing (ExprPath $1) }
@@ -601,17 +621,17 @@ ModuleItems
   : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
 
 ModuleItem
-  : Definition        { [Definition] }
-  | ';;' SeqExpr      { [Expr $2] }
+--  : Definition        { [Definition] }
+  : ';;' SeqExpr      { [Expr $2] }
   | ';;'              { [] }
 
-DefinitionOrExpr 
-  : Definition        { Definition }
-  | SeqExpr           { Expr $1 }
+DefinitionOrExpr
+--  : Definition        { Definition }
+  : SeqExpr           { Expr $1 }
 
 -- TODO: use actual definitions
-Definition 
-  : LET                  {  }
+--Definition { }
+--  : LET                  {  }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
@@ -621,7 +641,7 @@ Program
 
 -- UnitInterface : many(Specification opt(';;'))             { $1 }
 UnitInterface :                               { UnitInterface }
- 
+
 UnitImplementation : opt(ModuleItems)         { UnitImplementation $1 }
 
 
