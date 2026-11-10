@@ -6,7 +6,7 @@ import Data.Char (isAsciiLower, isAsciiUpper, isDigit, ord)
 import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
-import Intermediate.Type (Type (..))
+import Intermediate.Type (ArgLabel (..), Type (..))
 import Intermediate.TypedAst
 
 -- | Emit a Jasmin class with a static main method.
@@ -156,7 +156,7 @@ emitExpr env expression = case expression of
       pure (access "load" 1 local)
     Nothing -> reject ("unbound or first-class value " ++ show name)
   TEVar _ _ -> reject "module-qualified values"
-  TEApply {} -> reject "function application"
+  TEApply {} -> emitApply env expression
   TELet ty recursive bindings body -> do
     (newEnv, bindingsCode) <- emitBindings env recursive bindings
     bodyCode <- emitExpected newEnv ty body
@@ -177,6 +177,24 @@ emitExpr env expression = case expression of
   TEMatch {} -> reject "pattern matching"
   TEFunction {} -> reject "function values"
   TETry {} -> reject "exception handling"
+
+emitApply :: Env -> TExpr Type -> Emit Code
+emitApply env application = case application of
+  TEApply result (TEApply _ (TEVar _ (Path Nothing name)) NoLabel left) NoLabel right
+    | Map.notMember name env, Just (ty, opcode) <- Map.lookup name arithmetic -> do
+        requireType ty result
+        leftCode <- emitExpected env ty left
+        rightCode <- emitExpected env ty right
+        pure (leftCode <> rightCode <> instruction (-2) opcode <> normalizeInt ty)
+  _ -> reject "general function application"
+  where
+    arithmetic = Map.fromList
+      [ ("+", (TInt, "ladd")), ("-", (TInt, "lsub")), ("*", (TInt, "lmul")), ("/", (TInt, "ldiv")),
+        ("+.", (TDouble, "dadd")), ("-.", (TDouble, "dsub")), ("*.", (TDouble, "dmul")), ("/.", (TDouble, "ddiv"))
+      ]
+    normalizeInt TInt = instruction 1 "iconst_1" <> instruction (-1) "lshl"
+      <> instruction 1 "iconst_1" <> instruction (-1) "lshr"
+    normalizeInt _ = mempty
 
 emitConstant :: Type -> Constant -> Emit Code
 emitConstant ty constant = case constant of
