@@ -52,6 +52,72 @@ spec = do
     it "rejects two expressions without a ;; between them" $
       exprsOf "C 1 2" `shouldSatisfy` isLeft
 
+  describe "let bindings" $ do
+    it "keeps plain variable bindings as named bindings" $
+      parseExpr "let x = 1 in x"
+        `shouldBe` Right (ExprLet False [LetBindingTyped "x" [] Nothing Nothing (int 1)] (var "x"))
+    it "accepts destructuring patterns" $
+      parseExpr "let (x, y) = pair in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingPattern (PatternTuple [PatternVariable "x", PatternVariable "y"]) (var "pair")]
+          (var "x"))
+    it "accepts constructor, list, and annotated patterns" $ do
+      let t = TypeName (ExtendedPath Nothing "t")
+      parseExpr "let Some x = option in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingPattern (PatternVariant (Path Nothing "Some") (PatternVariable "x")) (var "option")]
+          (var "x"))
+      parseExpr "let [x; y] = values in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingPattern (PatternList [PatternVariable "x", PatternVariable "y"]) (var "values")]
+          (var "x"))
+      parseExpr "let (x : t) = y in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingPattern (PatternAnnotated (PatternVariable "x") t) (var "y")]
+          (var "x"))
+    it "retains type annotations and coercions for named bindings" $ do
+      let t = TypeName (ExtendedPath Nothing "t")
+      parseExpr "let x : t = y in x"
+        `shouldBe` Right (ExprLet False [LetBindingTyped "x" [] (Just t) Nothing (var "y")] (var "x"))
+      parseExpr "let x :> t = y in x"
+        `shouldBe` Right (ExprLet False [LetBindingTyped "x" [] Nothing (Just t) (var "y")] (var "x"))
+      let u = TypeName (ExtendedPath Nothing "u")
+      parseExpr "let x : t :> u = y in x"
+        `shouldBe` Right (ExprLet False [LetBindingTyped "x" [] (Just t) (Just u) (var "y")] (var "x"))
+    it "accepts parameterized named bindings" $ do
+      let t = TypeName (ExtendedPath Nothing "t")
+      parseExpr "let f x = x in f"
+        `shouldBe` Right (ExprLet False
+          [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] Nothing Nothing (var "x")]
+          (var "f"))
+      parseExpr "let f x : t = x in f"
+        `shouldBe` Right (ExprLet False
+          [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] (Just t) Nothing (var "x")]
+          (var "f"))
+    it "keeps recursive bindings and nested let expressions" $ do
+      parseExpr "let rec x = y in x"
+        `shouldBe` Right (ExprLet True [LetBindingTyped "x" [] Nothing Nothing (var "y")] (var "x"))
+      parseExpr "let x = let y = a in y in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingTyped "x" [] Nothing Nothing
+            (ExprLet False [LetBindingTyped "y" [] Nothing Nothing (var "a")] (var "y"))]
+          (var "x"))
+    it "rejects malformed bindings" $ do
+      parseExpr "let x = in x" `shouldSatisfy` isLeft
+      parseExpr "let f = in f" `shouldSatisfy` isLeft
+      parseExpr "let x : = y in x" `shouldSatisfy` isLeft
+    it "parses a sequence on a plain variable binding RHS" $
+      parseExpr "let x = a; b in x"
+        `shouldBe` Right (ExprLet False
+          [LetBindingTyped "x" [] Nothing Nothing (ExprSequence (var "a") (var "b"))]
+          (var "x"))
+    it "allows multiple bindings with different binder forms" $
+      parseExpr "let x = a and (y, z) = b in y"
+        `shouldBe` Right (ExprLet False
+          [ LetBindingTyped "x" [] Nothing Nothing (var "a"),
+            LetBindingPattern (PatternTuple [PatternVariable "y", PatternVariable "z"]) (var "b")
+          ] (var "y"))
+
   describe "module items" $ do
     it "separates expressions with ;;" $
       exprsOf "a ;; b ;; c" `shouldBe` Right [var "a", var "b", var "c"]
