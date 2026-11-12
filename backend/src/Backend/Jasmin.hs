@@ -15,7 +15,7 @@ import Intermediate.TypedAst
 generateJasmin :: String -> TProgram Type -> Either String String
 generateJasmin className (TProgram definitions) = do
   unless (validClassName className) $ Left ("Invalid JVM class name " ++ show className)
-  ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1)
+  ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1 0)
   let locals = nextLocal finalState
   when (locals > 65535 || peak code > 65535) $ Left "JVM method exceeds the stack or locals limit"
   pure $ unlines $
@@ -54,6 +54,15 @@ instance Monoid Code where
 instruction :: Int -> String -> Code
 instruction change name = Code change (max 0 change) (("  " ++ name) :)
 
+label :: String -> Code
+label name = Code 0 0 ((name ++ ":") :)
+
+-- The first arm ends in a jump. The second starts at the same incoming
+-- height as the first, and their result types agree at the join.
+alternatives :: Code -> Code -> Code
+alternatives first second = Code
+  (delta second) (max (peak first) (peak second)) (render first . render second)
+
 data ValueKind = UnitValue | IntValue | LongValue | DoubleValue
 
 kind :: Type -> Emit ValueKind
@@ -75,7 +84,7 @@ width valueKind = case valueKind of
 data Local = Local Type ValueKind Int
 type Env = Map.Map String Local
 
-newtype Supply = Supply {nextLocal :: Int}
+data Supply = Supply {nextLocal :: Int, nextLabel :: Int}
 type Emit = StateT Supply (Either String)
 
 reject :: String -> Emit a
@@ -92,6 +101,12 @@ freshLocal ty = do
   let slot = nextLocal supply
   put supply {nextLocal = slot + width valueKind}
   pure (Local ty valueKind slot)
+
+freshLabel :: Emit String
+freshLabel = do
+  supply <- get
+  put supply {nextLabel = nextLabel supply + 1}
+  pure ("L" ++ show (nextLabel supply))
 
 discard :: ValueKind -> Code
 discard valueKind = case width valueKind of
@@ -163,7 +178,15 @@ emitExpr env expression = case expression of
     pure (bindingsCode <> bodyCode)
   TESequence ty first second ->
     (<>) <$> emitDiscarded env first <*> emitExpected env ty second
-  TEIf {} -> reject "conditionals"
+  TEIf ty condition yes no -> do
+    elseLabel <- freshLabel
+    endLabel <- freshLabel
+    test <- emitExpected env TBool condition
+    yesCode <- emitExpected env ty yes
+    noCode <- emitExpected env ty no
+    pure $ test <> instruction (-1) ("ifeq " ++ elseLabel)
+      <> alternatives (yesCode <> instruction 0 ("goto " ++ endLabel)) (label elseLabel <> noCode)
+      <> label endLabel
   TEWhile {} -> reject "while loops"
   TEFor {} -> reject "for loops"
   TEVariant {} -> reject "variants"
