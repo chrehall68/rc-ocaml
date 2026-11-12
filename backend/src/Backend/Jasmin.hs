@@ -187,8 +187,34 @@ emitExpr env expression = case expression of
     pure $ test <> instruction (-1) ("ifeq " ++ elseLabel)
       <> alternatives (yesCode <> instruction 0 ("goto " ++ endLabel)) (label elseLabel <> noCode)
       <> label endLabel
-  TEWhile {} -> reject "while loops"
-  TEFor {} -> reject "for loops"
+  TEWhile ty condition body -> do
+    requireType TUnit ty
+    start <- freshLabel
+    end <- freshLabel
+    test <- emitExpected env TBool condition
+    bodyCode <- emitExpected env TUnit body
+    pure $ label start <> test <> instruction (-1) ("ifeq " ++ end)
+      <> bodyCode <> instruction 0 ("goto " ++ start) <> label end
+  TEFor ty name first lastValue increasing body -> do
+    requireType TUnit ty
+    startCode <- emitExpected env TInt first
+    endCode <- emitExpected env TInt lastValue
+    counter <- freshLocal TInt
+    bound <- freshLocal TInt
+    start <- freshLabel
+    end <- freshLabel
+    bodyCode <- emitExpected (Map.insert name counter env) TUnit body
+    let store = access "store" (-1)
+        load = access "load" 1
+        compareBounds = load counter <> load bound <> instruction (-3) "lcmp"
+        outOfRange = if increasing then "ifgt " else "iflt "
+        update = if increasing then "ladd" else "lsub"
+    pure $ startCode <> store counter <> endCode <> store bound
+      <> compareBounds <> instruction (-1) (outOfRange ++ end)
+      <> label start <> bodyCode
+      <> compareBounds <> instruction (-1) ("ifeq " ++ end)
+      <> load counter <> instruction 2 "lconst_1" <> instruction (-2) update <> store counter
+      <> instruction 0 ("goto " ++ start) <> label end
   TEVariant {} -> reject "variants"
   TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
