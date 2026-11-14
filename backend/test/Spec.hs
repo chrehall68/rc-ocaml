@@ -26,6 +26,11 @@ main = hspec $ describe "generateJasmin" $ do
     withCode (generateJasmin "Program" program) $ \code ->
       code `shouldContain` "  lstore 3\n  lload 1\n  lstore 5\n  lload 5\n  pop2\n  lload 1\n"
 
+  it "quotes control characters, quotes, backslashes, and non-BMP characters" $ do
+    let expression = TEConstant TString (ConstantString "a\n\"\\\x1f642")
+    withCode (generateExpressions [expression]) $ \code ->
+      code `shouldContain` "  ldc \"a\\u000a\\\"\\\\\\ud83d\\ude42\"\n"
+
   it "returns a diagnostic for an unsupported expression" $ do
     let expression = TEFunction (TArrow NoLabel TInt TInt) NoLabel Nothing []
     generateExpressions [expression] `shouldSatisfy` either (isInfixOf "function values") (const False)

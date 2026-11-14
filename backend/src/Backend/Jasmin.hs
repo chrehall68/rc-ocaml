@@ -8,6 +8,7 @@ import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.Type (ArgLabel (..), Type (..))
 import Intermediate.TypedAst
+import Numeric (showHex)
 
 -- | Emit a Jasmin class with a static main method.
 -- The class name uses JVM internal form, for example "example/Program".
@@ -63,7 +64,7 @@ alternatives :: Code -> Code -> Code
 alternatives first second = Code
   (delta second) (max (peak first) (peak second)) (render first . render second)
 
-data ValueKind = UnitValue | IntValue | LongValue | DoubleValue
+data ValueKind = UnitValue | IntValue | LongValue | DoubleValue | RefValue
 
 kind :: Type -> Emit ValueKind
 kind ty = case ty of
@@ -72,6 +73,7 @@ kind ty = case ty of
   TBool -> pure IntValue
   TChar -> pure IntValue
   TDouble -> pure DoubleValue
+  TString -> pure RefValue
   _ -> reject ("JVM representation for " ++ show ty)
 
 width :: ValueKind -> Int
@@ -80,6 +82,7 @@ width valueKind = case valueKind of
   IntValue -> 1
   LongValue -> 2
   DoubleValue -> 2
+  RefValue -> 1
 
 data Local = Local Type ValueKind Int
 type Env = Map.Map String Local
@@ -122,6 +125,7 @@ access operation direction (Local _ valueKind slot) =
         IntValue -> op 'i'
         LongValue -> op 'l'
         DoubleValue -> op 'd'
+        RefValue -> op 'a'
 
 emitDefinition :: (Env, Code) -> TDefinition Type -> Emit (Env, Code)
 emitDefinition (env, code) definition = case definition of
@@ -262,7 +266,10 @@ emitConstant ty constant = case constant of
   ConstantChar character
     | ord character <= 255 -> literal TChar 1 (show (ord character))
     | otherwise -> reject "character literals outside the OCaml byte range"
-  ConstantString _ -> reject "string literals"
+  ConstantString value -> do
+    let (size, quoted) = jasminString value
+    when (size > 65535) $ lift (Left "String literal exceeds the JVM constant pool entry limit")
+    literal TString 1 quoted
   ConstantBool boolean -> do
     requireType TBool ty
     pure (instruction 1 (if boolean then "iconst_1" else "iconst_0"))
@@ -279,3 +286,23 @@ emitConstant ty constant = case constant of
     floatingDivision numerator denominator = do
       requireType TDouble ty
       pure (instruction 2 numerator <> instruction 2 denominator <> instruction (-2) "ddiv")
+
+-- Jasmin reads Unicode escapes as UTF-16 code units. The size check uses
+-- the modified UTF-8 byte count used by the JVM's CONSTANT_Utf8 entries.
+jasminString :: String -> (Int, String)
+jasminString value = (sum (map bytes value), '"' : concatMap escape value ++ "\"")
+  where
+    bytes c
+      | ord c > 0xffff = 6
+      | ord c > 0x7ff = 3
+      | ord c > 0x7f || c == '\0' = 2
+      | otherwise = 1
+    escape c
+      | c == '"' = "\\\""
+      | c == '\\' = "\\\\"
+      | c >= ' ' && c <= '~' = [c]
+      | ord c <= 0xffff = unicode (ord c)
+      | otherwise =
+          let (high, low) = (ord c - 0x10000) `divMod` 0x400
+           in unicode (0xd800 + high) ++ unicode (0xdc00 + low)
+    unicode n = let digits = showHex n "" in "\\u" ++ replicate (4 - length digits) '0' ++ digits
