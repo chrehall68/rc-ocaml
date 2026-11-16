@@ -239,6 +239,17 @@ emitApply env application = case application of
         leftCode <- emitExpected env ty left
         rightCode <- emitExpected env ty right
         pure (leftCode <> rightCode <> instruction (-2) opcode <> normalizeInt ty)
+  TEApply result (TEVar _ (Path Nothing name)) NoLabel argument
+    | Map.notMember name env -> case name of
+        "print_endline" -> do
+          requireType TUnit result
+          code <- emitExpected env TString argument
+          pure $ instruction 1 "getstatic java/lang/System/out Ljava/io/PrintStream;"
+            <> code <> instruction (-2) "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
+        "string_of_int" -> conversion result argument TInt TString (-1) "invokestatic java/lang/Long/toString(J)Ljava/lang/String;"
+        "string_of_bool" -> conversion result argument TBool TString 0 "invokestatic java/lang/Boolean/toString(Z)Ljava/lang/String;"
+        "float_of_int" -> conversion result argument TInt TDouble 0 "l2d"
+        _ -> reject ("application of " ++ show name)
   _ -> reject "general function application"
   where
     arithmetic = Map.fromList
@@ -248,6 +259,10 @@ emitApply env application = case application of
     normalizeInt TInt = instruction 1 "iconst_1" <> instruction (-1) "lshl"
       <> instruction 1 "iconst_1" <> instruction (-1) "lshr"
     normalizeInt _ = mempty
+    conversion result argument from to change opcode = do
+      requireType to result
+      code <- emitExpected env from argument
+      pure (code <> instruction change opcode)
 
 emitConstant :: Type -> Constant -> Emit Code
 emitConstant ty constant = case constant of
