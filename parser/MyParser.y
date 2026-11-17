@@ -444,8 +444,6 @@ RecordPatternField
   | Field ':' TypeExpr                  { PatternField $1 (Just $3) (PatternVariable (pathName $1)) }
   | Field '=' Pattern                   { PatternField $1 Nothing $3 }
   | Field ':' TypeExpr '=' Pattern      { PatternField $1 (Just $3) $5 }
--- TODO: fill out this section
-Pattern : LiteralConstant { PatternConstant $1 }
 PolyTypeExpr
   : '}'             { TypeExpr }
 
@@ -505,9 +503,12 @@ Expr
   | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) ($3:$4) $6 }
 
 LetBinding
-  : Pattern '=' Expr { LetBindingPattern $1 $3 }
+  : Pattern '=' SeqExpr { letBindingFromPattern $1 $3 }
   | ValueName many1(Parameter) opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 $2 $3 $4 $6 }
-  | ValueName opt(AnnotatedTypeExpr) opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 [] $2 $3 $5 }
+  -- A bare name is already handled by Pattern. An unparameterized named
+  -- binding takes this path only when a type constraint or coercion follows.
+  | ValueName AnnotatedTypeExpr opt(AnnotatedTypeCoersionExpr) '=' SeqExpr { LetBindingTyped $1 [] (Just $2) $3 $5 }
+  | ValueName AnnotatedTypeCoersionExpr '=' SeqExpr { LetBindingTyped $1 [] Nothing (Just $2) $4 }
   -- TODO: use poly type expr here once that poly type expr's get implemented
   -- but since that would cause shift reduce conflicts, we should only use the 'a 'b ... branch
   -- of poly type expr
@@ -678,6 +679,12 @@ pathName (Path _ n) = n
 
 negativeInt :: IntLiteral -> IntLiteral
 negativeInt n = n { Tokens.value = negate (Tokens.value n) }
+
+-- Preserve the named-binding AST for simple names while allowing the full
+-- pattern grammar to handle destructuring (including parenthesized patterns).
+letBindingFromPattern :: Pattern -> Expr -> LetBinding
+letBindingFromPattern (PatternVariable name) rhs = LetBindingTyped name [] Nothing Nothing rhs
+letBindingFromPattern pat rhs = LetBindingPattern pat rhs
 
 -- The annotation on a parenthesized optional pattern belongs to the
 -- parameter, rather than becoming another PatternAnnotated node.

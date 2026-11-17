@@ -1,6 +1,6 @@
 module PatternSpec (spec) where
 
-import Ast
+import Ast hiding (pat)
 import Lexer (alexScanTokens)
 import MyParser (parsePattern)
 import Test.Hspec
