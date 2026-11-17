@@ -1,0 +1,58 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# cancel an in-progress run when a PR gets a newer push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # keep this in sync with the `base` bound in rc-ocaml.cabal
+      # (base 4.20.2 ships with GHC 9.10.3)
+      - uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: "9.10.3"
+          cabal-version: latest
+
+      - name: Configure
+        run: |
+          cabal update
+          cabal configure --enable-tests
+          # pin the dependency plan so it can be used as the cache key
+          cabal freeze
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-${{ hashFiles('cabal.project.freeze') }}
+          restore-keys: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-
+
+      # also builds the alex, happy, and hspec-discover build tools
+      - name: Build dependencies
+        run: cabal build all --only-dependencies
+
+      - name: Save dependency cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      # happy fails the build if the grammar's conflict count differs from %expect
+      - name: Build
+        run: cabal build all
+
+      - name: Test
+        run: cabal test all --test-show-details=direct

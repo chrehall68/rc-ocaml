@@ -603,7 +603,77 @@ Parameter
 
 
 -- 11.8 Types and Exception Definitions (https://ocaml.org/manual/5.3/typedecl.html)
--- TODO: fill out this section
+-- TODO: left out variance/injectivity annotations and the language extensions (private types, GADTs,
+-- inline records, extensible variants). If we get time, come back and add these
+TypeDefinition
+  : TYPE opt(NONREC) TypeDef many(TypeDefAnd)    { TypeDefinition (isJust $2) ($3 : $4) }
+
+TypeDefAnd
+  : AND TypeDef                                  { $2 }
+
+TypeDef
+  : TypeParams TypeconstrName TypeInformation
+      { let (eq, repr, cs) = $3 in TypeDef $1 $2 eq repr cs }
+
+TypeParams
+  : {- empty -}                                  { [] }
+  | TypeParam                                    { [$1] }
+  | '(' TypeParam many(CommaTypeParam) ')'       { $2 : $3 }
+
+CommaTypeParam
+  : ',' TypeParam                                { $2 }
+
+TypeParam
+  : QUOTE LIDENT                                 { $2 }
+
+-- Have to spell out each combination here to avoid shift/reduce conflicts
+TypeInformation
+  : many(TypeConstraint)                                         { (Nothing, Nothing, $1) }
+  | '=' TypeExpr many(TypeConstraint)                            { (Just $2, Nothing, $3) }
+  | '=' TypeRepresentation many(TypeConstraint)                  { (Nothing, Just $2, $3) }
+  | '=' TypeExpr '=' TypeRepresentation many(TypeConstraint)     { (Just $2, Just $4, $5) }
+
+-- the leading `=` is consumed by TypeInformation.
+-- the optional leading `|` is written out instead of using opt('|'), since an
+-- empty opt('|') would have to be reduced before knowing whether a type
+-- expression or a constructor follows the `=`
+TypeRepresentation
+  : ConstrDecls                                  { TypeVariant $1 }
+  | '|' ConstrDecls                              { TypeVariant $2 }
+  | '|'                                          { TypeVariant [] }  -- empty variant type
+  | '{' FieldDecls '}'                           { TypeRecord $2 }
+
+ConstrDecls
+  : ConstrDecl                                   { [$1] }
+  | ConstrDecls '|' ConstrDecl                   { $1 ++ [$3] }
+
+ConstrDecl
+  : ConstrDeclName                               { ConstrDecl $1 [] }
+  | ConstrDeclName OF ConstrArgs                 { ConstrDecl $1 $3 }
+
+ConstrDeclName
+  : ConstrName                                   { $1 }
+  | '[' ']'                                      { "[]" }
+  | '(' '::' ')'                                 { "::" }
+
+-- `of int * int` is two arguments, while `of (int * int)` is one tuple argument,
+-- so each argument is an AppliedType rather than a full TypeExpr. This matches
+-- OCaml, which also rejects an unparenthesized arrow such as `A of int -> int`.
+ConstrArgs
+  : AppliedType                                  { [$1] }
+  | ConstrArgs '*' AppliedType                   { $1 ++ [$3] }
+
+FieldDecls
+  : FieldDecl                                    { [$1] }
+  | FieldDecl ';'                                { [$1] }  -- trailing `;` is allowed
+  | FieldDecl ';' FieldDecls                     { $1 : $3 }
+
+-- TODO: once we have PolyTypeExprs, use those instead
+FieldDecl
+  : opt(MUTABLE) FieldName ':' TypeExpr          { FieldDecl (isJust $1) $2 $4 }
+
+TypeConstraint
+  : CONSTRAINT TypeExpr '=' TypeExpr             { TypeConstraint $2 $4 }
 
 -- 11.9 Classes (https://ocaml.org/manual/5.3/classes.html)
 -- TODO: fill out this section
@@ -622,17 +692,17 @@ ModuleItems
   : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
 
 ModuleItem
---  : Definition        { [Definition] }
-  : ';;' SeqExpr      { [Expr $2] }
+  : Definition        { [Definition $1] }
+  | ';;' SeqExpr      { [Expr $2] }
   | ';;'              { [] }
 
 DefinitionOrExpr
---  : Definition        { Definition }
-  : SeqExpr           { Expr $1 }
+  : Definition        { Definition $1 }
+  | SeqExpr           { Expr $1 }
 
--- TODO: use actual definitions
---Definition { }
---  : LET                  {  }
+-- TODO: add the remaining definitions (let, external, exception, module, ...)
+Definition
+  : TypeDefinition    { DefinitionType $1 }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
