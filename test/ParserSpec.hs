@@ -17,6 +17,13 @@ exprsOf src = fmap items (parseSource src)
     items (Program _ (UnitImplementation Nothing)) = []
     items (Program _ (UnitImplementation (Just (ModuleItems is)))) = [e | Expr e <- is]
 
+-- all the items (definitions and expressions) of a program
+itemsOf :: String -> Either String [DefinitionOrExpr]
+itemsOf src = fmap items (parseSource src)
+  where
+    items (Program _ (UnitImplementation Nothing)) = []
+    items (Program _ (UnitImplementation (Just (ModuleItems is)))) = is
+
 -- parse a single expression
 parseExpr :: String -> Either String Expr
 parseExpr src = exprsOf src >>= single
@@ -125,6 +132,37 @@ spec = do
       exprsOf ";; ;; a ;; ;; ;; b ;;" `shouldBe` Right [var "a", var "b"]
     it "allows definitions in between" $
       exprsOf "a ;; type t = int ;; b" `shouldBe` Right [var "a", var "b"]
+
+  describe "top-level let definitions" $ do
+    let letDef x e = Definition (DefinitionLet False [LetBindingTyped x [] Nothing Nothing e])
+        letExpr x e inExpr = Expr (ExprLet False [LetBindingTyped x [] Nothing Nothing e] inExpr)
+    it "parses a let definition" $
+      itemsOf "let x = 1" `shouldBe` Right [letDef "x" (int 1)]
+    it "parses rec and and" $
+      itemsOf "let rec x = y and y = x"
+        `shouldBe` Right
+          [ Definition (DefinitionLet True
+              [LetBindingTyped "x" [] Nothing Nothing (var "y"), LetBindingTyped "y" [] Nothing Nothing (var "x")])
+          ]
+    it "allows consecutive definitions without ;;" $
+      itemsOf "let x = 1 let y = 2" `shouldBe` Right [letDef "x" (int 1), letDef "y" (int 2)]
+    it "tells definitions and let-in expressions apart after ;;" $ do
+      itemsOf "a ;; let x = 1" `shouldBe` Right [Expr (var "a"), letDef "x" (int 1)]
+      itemsOf "a ;; let x = 1 in x" `shouldBe` Right [Expr (var "a"), letExpr "x" (int 1) (var "x")]
+      itemsOf "let x = 1 ;; let y = 2 in y"
+        `shouldBe` Right [letDef "x" (int 1), letExpr "y" (int 2) (var "y")]
+    it "allows a definition directly after an expression" $
+      itemsOf "a let x = 1" `shouldBe` Right [Expr (var "a"), letDef "x" (int 1)]
+    it "allows leading, repeated, and trailing ;; around definitions" $
+      itemsOf ";; let x = 1 ;; ;; let y = 2 ;; ;;" `shouldBe` Right [letDef "x" (int 1), letDef "y" (int 2)]
+    it "continues a sequence into let ... in after ;, like OCaml" $ do
+      itemsOf "a; let x = 1 in x"
+        `shouldBe` Right [Expr (ExprSequence (var "a") (ExprLet False [LetBindingTyped "x" [] Nothing Nothing (int 1)] (var "x")))]
+      itemsOf "a; let x = 1" `shouldSatisfy` isLeft
+    it "rejects malformed definitions" $ do
+      itemsOf "let x = 1 in" `shouldSatisfy` isLeft
+      itemsOf "let x = 1 ;; in x" `shouldSatisfy` isLeft
+      itemsOf "let x = 1 let" `shouldSatisfy` isLeft
 
   describe "names" $ do
     it "parses unqualified values" $

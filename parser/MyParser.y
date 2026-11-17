@@ -174,19 +174,15 @@ opt(p)
   : p          { Just $1 }
   | {- empty -} { Nothing }
 
--- helper for `many`
-many_rev(p)
-  :                { [] }
-  | many_rev(p) p  { $2 : $1 }
 -- allows equivalent of p*
-many(p)  : many_rev(p)  { reverse $1 }
+many(p) 
+  :  {- empty -}   { [] }
+  | p many(p)  { $1 : $2 }
 
--- helper for `many1`
-many1_rev(p)
-  : p              { [$1] }
-  | many1_rev(p) p { $2 : $1 }
 -- allows equivalent of p+
-many1(p) : many1_rev(p) { reverse $1 }
+many1(p)
+  : p              { [$1] }
+  | p many1(p) { $1 : $2 }
 
 -- 11.3 Names (https://ocaml.org/manual/5.3/names.html)
 
@@ -461,7 +457,10 @@ PolyTypeExpr
 -- should use SeqExpr whenever `;` can only mean sequencing, and Expr everywhere else.
 SeqExpr
   : Expr %prec below_SEMI     { $1 }
-  | Expr ';'                  { $1 }
+  -- At the top level, `e; let ...` could either end the sequence and start a
+  -- `let` definition or continue it with a `let ... in` expression. Like OCaml,
+  -- we always continue the sequence (OCaml rejects `x; let y = 1`).
+  | Expr ';' %shift           { $1 }
   | Expr ';' SeqExpr          { ExprSequence $1 $3 }
 
 Expr
@@ -500,7 +499,7 @@ Expr
   | FUNCTION opt('|') PatternMatching { ExprFunction $3 }
   | FUN many1(Parameter) opt(ReturnTypeAnnotation) '->' SeqExpr { ExprLambda $2 $3 $5 }
   | TRY SeqExpr WITH opt('|') PatternMatching { ExprTry $2 $5 }
-  | LET opt(REC) LetBinding many(LetBindingAnd) IN SeqExpr { ExprLet (isJust $2) ($3:$4) $6 }
+  | LetProduction IN SeqExpr { let (isRec, bindings) = $1 in ExprLet isRec bindings $3 }
 
 LetBinding
   : Pattern '=' SeqExpr { letBindingFromPattern $1 $3 }
@@ -516,6 +515,8 @@ LetBinding
 
 LetBindingAnd
   : AND LetBinding { $2 }
+
+LetProduction : LET opt(REC) LetBinding many(LetBindingAnd) { ((isJust $2), ($3 : $4)) }
 
 SimpleExpr
   : AtomExpr                  { $1 }
@@ -686,15 +687,17 @@ TypeConstraint
 --   { ;; } ( definition | expr ) { { ;; } definition | ;; expr } { ;; }
 -- but written out literally it is ambiguous: in `;; ;; expr` the parser
 -- can't tell which `;;` belongs to the `{ ;; }` run and which to `;; expr`.
--- so, instead, we give every `;;` exactly one role:
--- either it introduces an expr, or it is a stray separator.
+-- so, instead, each run of `;;`s is attached to the item that follows it
+-- (or ends the program).
 ModuleItems
-  : many(';;') DefinitionOrExpr many(ModuleItem)  { ModuleItems ($2 : concat $3) }
+  : many(';;') DefinitionOrExpr ModuleItemTail { ModuleItems ($2 : $3) }
 
-ModuleItem
-  : Definition        { [Definition $1] }
-  | ';;' SeqExpr      { [Expr $2] }
-  | ';;'              { [] }
+ModuleItemTail
+  : {- empty -}                                 { [] }
+  | many1(';;')                                 { [] }  -- allow for the trailing `;;`
+  | Definition ModuleItemTail                   { (Definition $1) : [] }
+  | many1(';;') DefinitionOrExpr ModuleItemTail { $2 : $3 }
+
 
 DefinitionOrExpr
   : Definition        { Definition $1 }
@@ -703,6 +706,7 @@ DefinitionOrExpr
 -- TODO: add the remaining definitions (let, external, exception, module, ...)
 Definition
   : TypeDefinition    { DefinitionType $1 }
+  | LetProduction     { let (isRec, bindings) = $1 in DefinitionLet isRec bindings }
 
 
 -- 11.12 Compilation Units (https://ocaml.org/manual/5.3/compunit.html)
