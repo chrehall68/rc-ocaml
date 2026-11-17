@@ -164,6 +164,8 @@ data TypeConstraint = TypeConstraint TypeExpr TypeExpr
 
 data Definition
   = DefinitionType TypeDefinition
+  | -- isRec, letBindings
+    DefinitionLet Bool [LetBinding]
   deriving (Show, Eq)
 
 data DefinitionOrExpr
