@@ -74,6 +74,8 @@ kind ty = case ty of
   TChar -> pure IntValue
   TDouble -> pure DoubleValue
   TString -> pure RefValue
+  TCon "array" [_] -> pure RefValue
+  TCon "list" [_] -> pure RefValue
   _ -> reject ("JVM representation for " ++ show ty)
 
 width :: ValueKind -> Int
@@ -222,8 +224,9 @@ emitExpr env expression = case expression of
   TEVariant {} -> reject "variants"
   TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
-  TECons {} -> reject "lists"
-  TEArray {} -> reject "arrays"
+  TECons {} -> reject "nonempty lists"
+  TEArray ty [] -> emitConstant ty ConstantArray
+  TEArray {} -> reject "nonempty arrays"
   TERecord {} -> reject "records"
   TEFieldAccess {} -> reject "record field access"
   TEFieldAssignment {} -> reject "record field assignment"
@@ -289,8 +292,12 @@ emitConstant ty constant = case constant of
     requireType TBool ty
     pure (instruction 1 (if boolean then "iconst_1" else "iconst_0"))
   ConstantUnit -> requireType TUnit ty >> pure mempty
-  ConstantList -> reject "list literals"
-  ConstantArray -> reject "array literals"
+  ConstantList -> case ty of
+    TCon "list" [_] -> pure (instruction 1 "aconst_null")
+    _ -> reject ("empty list with type " ++ show ty)
+  ConstantArray -> case ty of
+    TCon "array" [_] -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
+    _ -> reject ("empty array with type " ++ show ty)
   ConstantVariant _ -> reject "variant constants"
   ConstantPolymorphicVariant _ -> reject "polymorphic variant constants"
   where
