@@ -1,9 +1,9 @@
 module LexerSpec (spec) where
 
 import Control.Monad (forM_)
-import Lexer (alexScanTokens)
+import Frontend.Lexer (alexScanTokens)
 import Test.Hspec
-import Tokens
+import Frontend.Tokens
 
 int :: Int -> IntRepresentation -> Token
 int v r = TokenInt (IntLiteral {value = v, representation = r})

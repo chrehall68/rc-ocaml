@@ -1,6 +1,6 @@
 {
-module Lexer (alexScanTokens)  where
-import Tokens
+module Frontend.Lexer (alexScanTokens)  where
+import Frontend.Tokens
 import Data.Array
 import Data.Char
 import Data.Maybe

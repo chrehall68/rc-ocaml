@@ -1,9 +1,9 @@
 module TypeDefinitionSpec (spec) where
 
-import Ast
+import Frontend.Ast
 import Data.Either (isLeft)
-import Lexer (alexScanTokens)
-import MyParser (parse)
+import Frontend.Lexer (alexScanTokens)
+import Frontend.Parser (parse)
 import Test.Hspec
 
 -- parse a source made of a single type definition

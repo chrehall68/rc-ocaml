@@ -54,17 +54,19 @@ library frontend
     base ^>=4.20.2.0,
 
   exposed-modules:
-    Ast
-    Lexer
-    MyParser
-    Tokens
+    Frontend.Ast
+    Frontend.Lexer
+    Frontend.Parser
+    Frontend.Tokens
 
   build-tool-depends:
     alex:alex,
     happy:happy,
 
   -- Directories containing source files.
-  hs-source-dirs: frontend/lexer, frontend/parser
+  hs-source-dirs:
+    frontend/src/
+
   -- Base language which the package is written in.
   default-language: Haskell2010
 
@@ -91,10 +93,10 @@ test-suite frontend-test
   main-is: Spec.hs
   other-modules:
     LexerSpec
-    PatternSpec
     ParserSpec
-    TypeDefinitionSpec
+    PatternSpec
     TokensSpec
+    TypeDefinitionSpec
 
   build-depends:
     base ^>=4.20.2.0,
