@@ -124,7 +124,7 @@ spec = do
     it "allows leading, trailing and repeated ;;" $
       exprsOf ";; ;; a ;; ;; ;; b ;;" `shouldBe` Right [var "a", var "b"]
     it "allows definitions in between" $
-      exprsOf "a ;; let ;; b" `shouldBe` Right [var "a", var "b"]
+      exprsOf "a ;; type t = int ;; b" `shouldBe` Right [var "a", var "b"]
 
   describe "names" $ do
     it "parses unqualified values" $

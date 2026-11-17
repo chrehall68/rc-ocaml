@@ -130,8 +130,44 @@ data LetBinding
   | LetBindingTyped {letValueName :: String, params :: [Parameter], typeExpression :: Maybe TypeExpr, coercedType :: Maybe TypeExpr, expr1 :: Expr}
   deriving (Show, Eq)
 
+-- 11.8 Type definitions (https://ocaml.org/manual/5.3/typedecl.html)
+data TypeDefinition = TypeDefinition {isNonrec :: Bool, typedefs :: [TypeDef]}
+  deriving (Show, Eq)
+
+-- type parameters are stored without their leading quote ('a -> "a").
+-- TODO: maybe support variance/injectivity later
+data TypeDef = TypeDef
+  { typedefParams :: [String],
+    typedefName :: String,
+    typedefEquation :: Maybe TypeExpr,
+    typedefRepresentation :: Maybe TypeRepresentation,
+    typedefConstraints :: [TypeConstraint]
+  }
+  deriving (Show, Eq)
+
+data TypeRepresentation
+  = TypeVariant [ConstrDecl]
+  | TypeRecord [FieldDecl]
+  deriving (Show, Eq)
+
+-- ConstrDecl name args (args are in order of appearance, and will be empty for constant constructors)
+-- `[]` and `(::)` are stored as "[]" and "::".
+data ConstrDecl = ConstrDecl String [TypeExpr]
+  deriving (Show, Eq)
+
+data FieldDecl = FieldDecl {isMutable :: Bool, fieldDeclName :: String, fieldDeclType :: TypeExpr}
+  deriving (Show, Eq)
+
+-- constraint typexpr = typexpr
+data TypeConstraint = TypeConstraint TypeExpr TypeExpr
+  deriving (Show, Eq)
+
+data Definition
+  = DefinitionType TypeDefinition
+  deriving (Show, Eq)
+
 data DefinitionOrExpr
-  = Definition
+  = Definition Definition
   | Expr Expr
   deriving (Show, Eq)
 
