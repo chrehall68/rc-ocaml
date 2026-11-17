@@ -42,7 +42,8 @@ extra-doc-files: CHANGELOG.md
 common warnings
   ghc-options: -Wall
 
-library
+-- Front end: lexer, parser, and AST.
+library frontend
   -- Import common warning flags.
   import: warnings
   -- LANGUAGE extensions used by modules in this package.
@@ -63,7 +64,7 @@ library
     happy:happy,
 
   -- Directories containing source files.
-  hs-source-dirs: lexer, parser
+  hs-source-dirs: frontend/lexer, frontend/parser
   -- Base language which the package is written in.
   default-language: Haskell2010
 
@@ -77,14 +78,14 @@ executable rc-ocaml
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.20.2.0,
-    rc-ocaml,
+    rc-ocaml:frontend,
 
   -- Directories containing source files.
   hs-source-dirs: exe
   -- Base language which the package is written in.
   default-language: Haskell2010
 
-test-suite rc-ocaml-test
+test-suite frontend-test
   import: warnings
   type: exitcode-stdio-1.0
   main-is: Spec.hs
@@ -98,10 +99,10 @@ test-suite rc-ocaml-test
   build-depends:
     base ^>=4.20.2.0,
     hspec,
-    rc-ocaml,
+    rc-ocaml:frontend,
 
   build-tool-depends:
     hspec-discover:hspec-discover
 
-  hs-source-dirs: test
+  hs-source-dirs: frontend/test
   default-language: Haskell2010
