@@ -1,25 +1,24 @@
 module Intermediate.TypeAnnotator (lowerAndInfer) where
 
-import Control.Monad.State (State, evalState, gets, modify, runState)
+import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
+import Control.Monad.State (State, evalState, gets, runState, state)
 import Data.Either (partitionEithers)
 import qualified Frontend.Ast as Ast
 import Intermediate.SymbolTable
 import Intermediate.Type
 import Intermediate.TypedAst
 
-type LowerAndInferM = State InferState
-
 type OrError x = Either String x
 
-type LowerOrError x = LowerAndInferM (OrError x)
-
-lowerSuccess :: a -> LowerOrError a
-lowerSuccess x = return $ return x
-
-lowerFail :: String -> LowerOrError a
-lowerFail x = return $ Left x
-
 data InferState = InferState {symbolTable :: SymbolTable, typeState :: TypeVarState}
+
+-- like the previous State OrError, but without as much lifting required
+type LowerAndInferM = ExceptT String (State InferState)
+
+-- run a TypeVarM action against the type var state stored in InferState
+liftTypes :: TypeVarM a -> LowerAndInferM a
+liftTypes m = state $ \s ->
+  let (a, ts) = runState m (typeState s) in (a, s {typeState = ts})
 
 -- lower the parsed ast to our lower representation, and add types where possible
 lowerAndInfer :: Ast.Program -> OrError (TProgram Type)
@@ -29,69 +28,53 @@ lowerAndInfer (Ast.Program _interface (Ast.UnitImplementation (implementation)))
         Just (Ast.ModuleItems moduleItems) -> moduleItems
         Nothing -> []
       inferState = InferState {symbolTable = empty, typeState = initialTypeVarState}
-      results = evalState (mapM lowerDefinitionOrExpr items) inferState
+      results = evalState (mapM (runExceptT . lowerDefinitionOrExpr) items) inferState
       (lefts, rights) = partitionEithers results
    in case lefts of
         [] -> Right $ TProgram rights
         errors -> Left $ unlines errors
 
-lowerDefinitionOrExpr :: Ast.DefinitionOrExpr -> LowerOrError (TDefinition Type)
-lowerDefinitionOrExpr defOrExpr = do
+lowerDefinitionOrExpr :: Ast.DefinitionOrExpr -> LowerAndInferM (TDefinition Type)
+lowerDefinitionOrExpr defOrExpr =
   case defOrExpr of
-    Ast.Definition d ->
-      lowerDefinition d
-    Ast.Expr e -> do
-      texpr <- lowerExpr e
-      return $ texpr >>= return . TDefinitionExpr
+    Ast.Definition d -> lowerDefinition d
+    Ast.Expr e -> TDefinitionExpr <$> lowerExpr e
 
-typeConstant :: Ast.Constant -> LowerOrError Type
+typeConstant :: Ast.Constant -> LowerAndInferM Type
 typeConstant constant =
   case constant of
-    Ast.ConstantInt _ -> lowerSuccess TInt
-    Ast.ConstantDouble _ -> lowerSuccess TDouble
-    Ast.ConstantChar _ -> lowerSuccess TChar
-    Ast.ConstantString _ -> lowerSuccess TString
-    Ast.ConstantBool _ -> lowerSuccess TBool
-    Ast.ConstantUnit -> lowerSuccess TUnit
+    Ast.ConstantInt _ -> return TInt
+    Ast.ConstantDouble _ -> return TDouble
+    Ast.ConstantChar _ -> return TChar
+    Ast.ConstantString _ -> return TString
+    Ast.ConstantBool _ -> return TBool
+    Ast.ConstantUnit -> return TUnit
+    -- don't know what will be inside, so we store it as an 'a list / 'a array
     Ast.ConstantList -> do
-      -- don't know what will be in the list, so we store it as a 'a list
-      tpState <- gets typeState
-      let (tvar, nextState) = runState newTypeVar tpState
-      modify (\state -> state {typeState = nextState})
-      lowerSuccess $ TCon "list" [tvar]
+      tvar <- liftTypes newTypeVar
+      return $ TCon "list" [tvar]
     Ast.ConstantArray -> do
-      -- like with lists, we don't know what will be inside
-      tpState <- gets typeState
-      let (tvar, nextState) = runState newTypeVar tpState
-      modify (\state -> state {typeState = nextState})
-      lowerSuccess $ TCon "array" [tvar]
+      tvar <- liftTypes newTypeVar
+      return $ TCon "array" [tvar]
     -- TODO: implement these
-    Ast.ConstantPolymorphicVariant _ -> lowerFail "polymorphic variants not implemented yet"
+    Ast.ConstantPolymorphicVariant _ -> throwError "polymorphic variants not implemented yet"
     Ast.ConstantVariant path -> do
       -- need to know where this variant name comes from
       symtab <- gets symbolTable
-      let constructorInfo = resolveConstructor symtab (show path)
-      let resolvedType =
-            constructorInfo >>= \info ->
-              -- double check that it is a 0-arg constructor
-              let args = constructorArgs info
-                  expectedLength = length args
-               in if expectedLength == 0
-                    then
-                      return $ constructorResult info
-                    else
-                      Left $ "constructor " ++ show path ++ " expects " ++ show expectedLength ++ " arguments, but was called with 0"
+      info <- liftEither $ resolveConstructor symtab (show path)
+      -- double check that it is a 0-arg constructor
+      let expectedLength = length (constructorArgs info)
+      if expectedLength == 0
+        then return $ constructorResult info
+        else throwError $ "constructor " ++ show path ++ " expects " ++ show expectedLength ++ " arguments, but was called with 0"
 
-      return resolvedType
-
-lowerExpr :: Ast.Expr -> LowerOrError (TExpr Type)
-lowerExpr expr = do
+lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
+lowerExpr expr =
   case expr of
     Ast.ExprConstant constant -> do
       t <- typeConstant constant
-      return $ t >>= (\tp -> return $ TEConstant tp constant)
-    _ -> lowerFail "failed"
+      return $ TEConstant t constant
+    _ -> throwError "failed"
 
-lowerDefinition :: Ast.Definition -> LowerOrError (TDefinition Type)
-lowerDefinition _def = do
-  lowerFail "failed"
+lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)
+lowerDefinition _def = throwError "failed"
