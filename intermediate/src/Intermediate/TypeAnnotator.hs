@@ -71,6 +71,17 @@ typeConstant constant =
         then return $ constructorResult info
         else throwError $ "constructor " ++ show path ++ " expects " ++ show expectedLength ++ " arguments, but was called with 0"
 
+unifyOrRollback :: Type -> Type -> LowerAndInferM ()
+unifyOrRollback a b = do
+  originalState <- gets typeState
+  unifies <- liftTypes $ runExceptT $ unify a b
+  case unifies of
+    Right () -> return ()
+    Left err -> do
+      -- rollback our state
+      modify (\s -> s {typeState = originalState})
+      throwError err
+
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
@@ -82,23 +93,18 @@ lowerExpr expr =
       symtab <- gets symbolTable
       tp <- liftEither $ resolveValue symtab p
       return $ TEVar tp p
-    -- TODO: many things in between
+    -- TODO: implement the many other expr types between ExprPath and ExprInfix
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable
       opType <- liftEither $ resolveValue symtab (Ast.Path Nothing op)
       typedLeft <- lowerExpr left
       typedRight <- lowerExpr right
       -- then need to unify op with leftType -> rightType -> a
-      output <- liftTypes $ newTypeVar
-      let rhs = TArrow NoLabel (exprAnnotation typedRight) (TVar output)
+      outputType <- liftTypes newTypeVar
+      let rhs = TArrow NoLabel (exprAnnotation typedRight) (TVar outputType)
           desiredType = TArrow NoLabel (exprAnnotation typedLeft) rhs
-      unifies <- liftTypes $ unify desiredType opType
-      if unifies
-        then
-          -- success
-          return $ TEApply (TVar output) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) NoLabel typedLeft) NoLabel typedRight
-        else
-          throwError "Type error: could not unify"
+      () <- unifyOrRollback desiredType opType
+      return $ TEApply (TVar outputType) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) NoLabel typedLeft) NoLabel typedRight
     _ -> throwError "Not implemented"
 
 lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)

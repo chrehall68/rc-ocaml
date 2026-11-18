@@ -1,7 +1,9 @@
 module Intermediate.Type where
 
-import Control.Exception (assert)
+import Control.Monad (when)
+import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify)
+import Control.Monad.Trans
 import qualified Data.Map
 import Data.Maybe (isNothing)
 
@@ -97,41 +99,76 @@ resolveType t = do
 -- for the fact that instead of dealing with unary functions, we deal with
 -- functions with multiple arguments
 -- see page 397
-unify :: Type -> Type -> TypeVarM Bool
-unify t1 t2 = do
-  t1 <- prune t1
-  t2 <- prune t2
+unify :: Type -> Type -> ExceptT String TypeVarM ()
+unify originalT1 originalT2 = do
+  t1 <- lift $ prune originalT1
+  t2 <- lift $ prune originalT2
   if t1 == t2
-    then return True
+    then
+      return ()
     else case (t1, t2) of
       (TArrow argLabel1 from1 to1, TArrow argLabel2 from2 to2) -> do
         -- unify children
-        result1 <- unify from1 from2
-        result2 <- unify to1 to2
-        return $ argLabel1 == argLabel2 && result1 && result2
+        when (argLabel1 /= argLabel2) $ throwError $ "Cannot unify function that expects " ++ (show argLabel1) ++ " with function that expects " ++ (show argLabel2)
+        () <- unify from1 from2
+        () <- unify to1 to2
+        return ()
       (TCon tName1 types1, TCon tName2 types2) -> do
         -- must have same name and zip together be unifiable
-        unificationResults <- mapM (\(a, b) -> unify a b) (zip types1 types2)
-        let childrenUnify = foldl (&&) True unificationResults
-        return $ tName1 == tName2 && length types1 == length types2 && childrenUnify
+        when (tName1 /= tName2) $ throwError $ "Cannot unify type constructors " ++ tName1 ++ " and " ++ tName2
+        when (length types1 /= length types2) $ throwError $ "Cannot unify type constructors " ++ tName1 ++ " and " ++ tName2 ++ " because have different lengths of parameters"
+        mapM_ (\(a, b) -> unify a b) (zip types1 types2)
+        return ()
       (TTuple types1, TTuple types2) -> do
         -- just like with con, but without the type name part
-        unificationResults <- mapM (\(a, b) -> unify a b) (zip types1 types2)
-        let childrenUnify = foldl (&&) True unificationResults
-        return $ length types1 == length types2 && childrenUnify
+        when (length types1 /= length types2) $ throwError $ "Cannot unify tuples because have different lengths of parameters: " ++ (show $ length types1) ++ " vs " ++ (show $ length types2)
+        mapM_ (\(a, b) -> unify a b) (zip types1 types2)
+        return ()
       (TVar a, other) -> do
         -- since a is the result of doing a prune operation
         -- it shouldn't have a binding yet
-        noBinding <- isNothing <$> lookupTypeVar a
+        noBinding <- isNothing <$> (lift $ lookupTypeVar a)
         -- then bind a to it
-        assert noBinding $ bindTypeVar a other
+        when (not noBinding) $ error "impossible to happen"
+        checkNotRecursive a other
+        lift $ bindTypeVar a other
         -- and then we are done
-        return True
+        return ()
       (other, TVar a) -> do
         -- same thing on this side
-        noBinding <- isNothing <$> lookupTypeVar a
-        assert noBinding $ bindTypeVar a other
-        return True
+        noBinding <- isNothing <$> (lift $ lookupTypeVar a)
+        when (not noBinding) $ error "impossible to happen"
+        checkNotRecursive a other
+        lift $ bindTypeVar a other
+        return ()
       -- it's not a variable, and it's not a matching type, so therefore
       -- not unifiable
-      _ -> return False
+      _ -> throwError $ "Cannot unify types " ++ (show t1) ++ " and " ++ (show t2)
+
+-- need to make sure that we don't have an infinite type
+checkNotRecursive :: TypeVar -> Type -> ExceptT String TypeVarM ()
+checkNotRecursive tVar t = do
+  -- walk t and make sure tVar doesn't appear there
+  t' <- lift $ prune t
+  case t' of
+    TUnit -> return ()
+    TInt -> return ()
+    TBool -> return ()
+    TDouble -> return ()
+    TChar -> return ()
+    TString -> return ()
+    TArrow _ t1 t2 -> do
+      checkNotRecursive tVar t1
+      checkNotRecursive tVar t2
+      return ()
+    TTuple types -> do
+      mapM_ (checkNotRecursive tVar) types
+      return ()
+    TCon _ types -> do
+      mapM_ (checkNotRecursive tVar) types
+      return ()
+    TVar otherVar ->
+      if otherVar == tVar
+        then
+          throwError $ "Infinite type. The type variable " ++ (show tVar) ++ " appears inside the expression it would bind to"
+        else return ()
