@@ -1,7 +1,7 @@
 module Main (main) where
 
-import Lexer (alexScanTokens)
-import MyParser
+import Frontend.Lexer (alexScanTokens)
+import Frontend.Parser
 import System.Exit (exitFailure)
 
 failWith :: String -> IO a

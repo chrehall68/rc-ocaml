@@ -1,6 +1,6 @@
-module Ast where
+module Frontend.Ast where
 
-import Tokens
+import Frontend.Tokens
 
 -- names (https://ocaml.org/manual/5.3/names.html)
 newtype ModulePath = ModulePath [String]

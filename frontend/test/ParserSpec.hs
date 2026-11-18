@@ -1,10 +1,10 @@
 module ParserSpec (spec) where
 
-import Ast
-import Lexer (alexScanTokens)
-import MyParser (parse)
+import Frontend.Ast
+import Frontend.Lexer (alexScanTokens)
+import Frontend.Parser (parse)
 import Test.Hspec
-import Tokens
+import Frontend.Tokens
 
 -- lex and parse a whole source string
 parseSource :: String -> Either String Program
@@ -44,10 +44,10 @@ infixE :: String -> Expr -> Expr -> Expr
 infixE o l r = ExprInfix {op = o, left = l, right = r}
 
 int :: Int -> Expr
-int v = ExprConstant (ConstantInt (IntLiteral {Tokens.value = v, representation = Unspecified}))
+int v = ExprConstant (ConstantInt (IntLiteral {Frontend.Tokens.value = v, representation = Unspecified}))
 
 intPat :: Int -> Pattern
-intPat v = PatternConstant (ConstantInt (IntLiteral {Tokens.value = v, representation = Unspecified}))
+intPat v = PatternConstant (ConstantInt (IntLiteral {Frontend.Tokens.value = v, representation = Unspecified}))
 
 spec :: Spec
 spec = do
@@ -452,7 +452,7 @@ spec = do
           ( ExprFieldAssignment
               { expr = a,
                 field = fieldPath "f",
-                Ast.value = b
+                Frontend.Ast.value = b
               }
           )
     it "reads a module path before the dot as a path, not a constructor" $
@@ -471,7 +471,7 @@ spec = do
           ( ExprFieldAssignment
               { expr = a,
                 field = fieldPath "f",
-                Ast.value = infixE "+" b c
+                Frontend.Ast.value = infixE "+" b c
               }
           )
     it "lets the assigned value be a tuple" $
@@ -480,7 +480,7 @@ spec = do
           ( ExprFieldAssignment
               { expr = a,
                 field = fieldPath "f",
-                Ast.value = ExprTuple [b, c]
+                Frontend.Ast.value = ExprTuple [b, c]
               }
           )
     it "associates <- and := together to the right" $
@@ -489,7 +489,7 @@ spec = do
           ( ExprFieldAssignment
               { expr = a,
                 field = fieldPath "f",
-                Ast.value = infixE ":=" b c
+                Frontend.Ast.value = infixE ":=" b c
               }
           )
 

@@ -1,7 +1,7 @@
 module TokensSpec (spec) where
 
 import Test.Hspec
-import Tokens
+import Frontend.Tokens
 
 spec :: Spec
 spec = do

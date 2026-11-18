@@ -1,10 +1,10 @@
 module PatternSpec (spec) where
 
-import Ast hiding (pat)
-import Lexer (alexScanTokens)
-import MyParser (parsePattern)
+import Frontend.Ast hiding (pat)
+import Frontend.Lexer (alexScanTokens)
+import Frontend.Parser (parsePattern)
 import Test.Hspec
-import Tokens
+import Frontend.Tokens
 
 pat :: String -> Either String Pattern
 pat source = alexScanTokens source >>= parsePattern

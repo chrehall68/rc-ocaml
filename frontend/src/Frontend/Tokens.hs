@@ -1,4 +1,4 @@
-module Tokens (Token (..), IntLiteral (..), IntRepresentation (..), infixToken, decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
+module Frontend.Tokens (Token (..), IntLiteral (..), IntRepresentation (..), infixToken, decodeOcamlInt, decodeOcamlDouble, decodeChar, decodeUnicodeChar) where
 
 import Data.Char
 import Numeric

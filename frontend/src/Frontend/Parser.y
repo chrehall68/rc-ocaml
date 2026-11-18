@@ -1,8 +1,8 @@
 {
-module MyParser where
+module Frontend.Parser where
 -- Import any AST or token types needed here
-import Ast
-import Tokens
+import Frontend.Ast
+import Frontend.Tokens
 import Data.Char
 import Data.Maybe
 }
@@ -752,7 +752,7 @@ pathName :: Path -> String
 pathName (Path _ n) = n
 
 negativeInt :: IntLiteral -> IntLiteral
-negativeInt n = n { Tokens.value = negate (Tokens.value n) }
+negativeInt n = n { Frontend.Tokens.value = negate (Frontend.Tokens.value n) }
 
 -- Preserve the named-binding AST for simple names while allowing the full
 -- pattern grammar to handle destructuring (including parenthesized patterns).
