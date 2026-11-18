@@ -3,13 +3,24 @@ module Main (main) where
 import Backend.Jasmin (generateJasmin)
 import Data.List (isInfixOf)
 import Frontend.Ast (Constant (..), Path (..))
+import Frontend.Lexer (alexScanTokens)
+import Frontend.Parser (parse)
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.Type (ArgLabel (..), Type (..))
+import Intermediate.TypeAnnotator (lowerAndInfer)
 import Intermediate.TypedAst
 import Test.Hspec
 
 main :: IO ()
 main = hspec $ describe "generateJasmin" $ do
+  it "accepts the output of the lexer, parser, and type annotator" $ do
+    let generated = alexScanTokens "let x = 40;; let y = x + 2"
+          >>= parse >>= lowerAndInfer >>= generateJasmin "example/Program"
+    withCode generated $ \code -> do
+      code `shouldContain` ".class public example/Program\n"
+      code `shouldContain` "  .limit locals 5\n"
+      code `shouldContain` "  lload 1\n  ldc2_w 2L\n  ladd\n"
+
   it "counts two-slot operands and shares the stack height at a conditional join" $ do
     let condition = TEConstant TBool (ConstantBool False)
         choose = TEIf TDouble condition (double 1.5) (double 2.5)
