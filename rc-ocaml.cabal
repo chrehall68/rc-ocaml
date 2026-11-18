@@ -76,10 +76,12 @@ library intermediate
   build-depends:
     base ^>=4.20.2.0,
     containers,
+    mtl,
     rc-ocaml:frontend,
 
   exposed-modules:
     Intermediate.SymbolTable
+    Intermediate.Type
 
   -- Directories containing source files.
   hs-source-dirs:
