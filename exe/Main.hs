@@ -1,7 +1,8 @@
 module Main (main) where
 
 import Frontend.Lexer (alexScanTokens)
-import Frontend.Parser
+import Frontend.Parser (parse)
+import Intermediate.TypeAnnotator (lowerAndInfer)
 import System.Exit (exitFailure)
 
 failWith :: String -> IO a
@@ -20,3 +21,5 @@ main = do
   print tokens
   ast <- orExit $ parse tokens
   print ast
+  typedAst <- orExit $ lowerAndInfer ast
+  print typedAst
