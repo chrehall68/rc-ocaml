@@ -25,7 +25,7 @@ data Type
     TUnit
   | TInt
   | TBool
-  | TFloat
+  | TDouble
   | TChar
   | TString
   | -- things that might need to get resolved

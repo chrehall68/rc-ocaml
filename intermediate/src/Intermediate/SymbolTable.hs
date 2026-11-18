@@ -70,13 +70,13 @@ initialScope =
           [ -- create strings
             ("string_of_int", TArrow NoLabel TInt TString),
             ("string_of_bool", TArrow NoLabel TBool TString),
-            ("string_of_float", TArrow NoLabel TFloat TString),
+            ("string_of_float", TArrow NoLabel TDouble TString),
             -- create ints
             ("int_of_string", TArrow NoLabel TString TInt),
-            ("int_of_float", TArrow NoLabel TFloat TInt),
+            ("int_of_float", TArrow NoLabel TDouble TInt),
             -- create floats
-            ("float_of_string", TArrow NoLabel TString TFloat),
-            ("float_of_int", TArrow NoLabel TInt TFloat),
+            ("float_of_string", TArrow NoLabel TString TDouble),
+            ("float_of_int", TArrow NoLabel TInt TDouble),
             -- create bool
             ("bool_of_string", TArrow NoLabel TString TBool),
             -- TODO: do we need anything for chars?
@@ -88,10 +88,10 @@ initialScope =
             ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
             ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
             ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
+            ("+.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
+            ("-.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
+            ("*.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
+            ("/.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble))
           ],
       constructors = Data.Map.fromList [],
       fields = Data.Map.fromList []
