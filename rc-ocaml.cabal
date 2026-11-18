@@ -70,6 +70,24 @@ library frontend
   -- Base language which the package is written in.
   default-language: Haskell2010
 
+library intermediate
+  -- Import common warning flags.
+  import: warnings
+  build-depends:
+    base ^>=4.20.2.0,
+    containers,
+    rc-ocaml:frontend,
+
+  exposed-modules:
+    Intermediate.SymbolTable
+
+  -- Directories containing source files.
+  hs-source-dirs:
+    intermediate/src/
+
+  -- Base language which the package is written in.
+  default-language: Haskell2010
+
 executable rc-ocaml
   -- Import common warning flags.
   import: warnings
