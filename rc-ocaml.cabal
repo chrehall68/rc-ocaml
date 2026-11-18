@@ -133,3 +133,23 @@ test-suite frontend-test
 
   hs-source-dirs: frontend/test
   default-language: Haskell2010
+
+test-suite intermediate-test
+  import: warnings
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+    TypeSpec
+
+  build-depends:
+    base ^>=4.20.2.0,
+    containers,
+    hspec,
+    mtl,
+    rc-ocaml:intermediate,
+
+  build-tool-depends:
+    hspec-discover:hspec-discover
+
+  hs-source-dirs: intermediate/test
+  default-language: Haskell2010
