@@ -5,6 +5,8 @@ import Frontend.Ast
 import Frontend.Tokens
 import Data.Char
 import Data.Maybe
+import Data.List.NonEmpty (NonEmpty(..), (<|))
+import qualified Data.List.NonEmpty  as NonEmpty
 }
 
 %monad { ParseResult } { (>>=) } { return }
@@ -465,7 +467,7 @@ SeqExpr
 
 Expr
   : SimpleExpr                { $1 }
-  | ExprCommaList %prec BELOW_COMMA  { ExprTuple (reverse $1) }
+  | ExprCommaList %prec BELOW_COMMA  { case reverse $1 of (a : b : rest) -> ExprTuple a b rest }
   | Constr SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantVariant $1 $2 }
   | BACKTICK TagName SimpleExpr %prec CONSTR_APPLICATION  { ExprNonconstantPolymorphicVariant $2 $3 }
   | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
@@ -531,8 +533,8 @@ AtomExpr
   | '(' SeqExpr ')'            { $2 }
   | BEGIN SeqExpr END          { $2 }
   | '(' SeqExpr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
-  | '[' ExprList ']'   { ExprCons $2 }
-  | '[|' ExprList '|]' { ExprArray (init $2) }
+  | '[' ExprList ']'   { ExprCons (NonEmpty.appendList $2 [(ExprConstant ConstantList)]) }
+  | '[|' ExprList '|]' { ExprArray $2 }
   | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }
   -- since `=` is an infix operator, `{ x = e ... }` would be ambiguous with `{ (x = e) with ... }`
   -- so we put this rule here instead
@@ -544,13 +546,13 @@ ExprCommaList
   | ExprCommaList ',' Expr      { $3 : $1 }
 
 ExprConsList
-  : Expr '::' Expr                       { [$1, $3] }
-  | Expr '::' ExprConsList               { $1: $3 }
+  : Expr '::' Expr                       { $1 :| [$3] }
+  | Expr '::' ExprConsList               { $1 <| $3 }
 
 ExprList
-  : Expr ';' ExprList  { $1 : $3 }
-  | Expr ';'           { [$1, ExprConstant ConstantList] }  -- it's ok to have a trailing `;`
-  | Expr               { [$1, ExprConstant ConstantList] }
+  : Expr ';' ExprList  { $1 <| $3 }
+  | Expr ';'           { NonEmpty.singleton $1 }  -- it's ok to have a trailing `;`
+  | Expr               { NonEmpty.singleton $1 }
 
 AnnotatedTypeExpr
   : ':' TypeExpr { $2 }

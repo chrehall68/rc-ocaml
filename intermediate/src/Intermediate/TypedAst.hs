@@ -15,6 +15,7 @@
 
 module Intermediate.TypedAst where
 
+import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Constant, Path, TypeDefinition)
 import Intermediate.Type (ArgLabel)
 
@@ -28,10 +29,11 @@ data TExpr t
     TEVariant t Path (TExpr t)
   | -- TODO: needs row types before it can be typed
     TEPolymorphicVariant t String (TExpr t)
-  | TETuple t [TExpr t]
+  | -- a tuple always has at least two elements
+    TETuple t (TExpr t) (TExpr t) [TExpr t]
   | -- head, tail
     TECons t (TExpr t) (TExpr t)
-  | TEArray t [TExpr t]
+  | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
     TERecord t (Maybe (TExpr t)) [(Path, TExpr t)]
   | -- function, how the argument is passed, argument
@@ -100,7 +102,7 @@ exprAnnotation e = case e of
   TEVar t _ -> t
   TEVariant t _ _ -> t
   TEPolymorphicVariant t _ _ -> t
-  TETuple t _ -> t
+  TETuple t _ _ _ -> t
   TECons t _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t
