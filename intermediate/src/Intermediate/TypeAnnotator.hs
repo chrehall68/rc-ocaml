@@ -28,5 +28,5 @@ lowerAndInfer (Ast.Program _interface (Ast.UnitImplementation (implementation)))
 lowerDefinitionOrExpr :: Ast.DefinitionOrExpr -> LowerAndInferM (Either String (TDefinition Type))
 lowerDefinitionOrExpr defOrExpr = do
   case defOrExpr of
-    Ast.Definition d -> return $ Left "failed"
-    Ast.Expr e -> return $ Left "Failed"
+    Ast.Definition _d -> return $ Left "failed"
+    Ast.Expr _e -> return $ Left "Failed"

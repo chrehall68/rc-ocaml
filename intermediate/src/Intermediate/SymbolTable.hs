@@ -59,8 +59,46 @@ type SymbolTable = [Scope]
 emptyScope :: Scope
 emptyScope = Scope {values = Data.Map.empty, constructors = Data.Map.empty, fields = Data.Map.empty}
 
+-- predefined identifiers / constructs
+-- TODO: maybe this should be dependency injected since
+-- the converter will also need to know what's predefined...
+initialScope :: Scope
+initialScope =
+  Scope
+    { values =
+        Data.Map.fromList
+          [ -- create strings
+            ("string_of_int", TArrow NoLabel TInt TString),
+            ("string_of_bool", TArrow NoLabel TBool TString),
+            ("string_of_float", TArrow NoLabel TFloat TString),
+            -- create ints
+            ("int_of_string", TArrow NoLabel TString TInt),
+            ("int_of_float", TArrow NoLabel TFloat TInt),
+            -- create floats
+            ("float_of_string", TArrow NoLabel TString TFloat),
+            ("float_of_int", TArrow NoLabel TInt TFloat),
+            -- create bool
+            ("bool_of_string", TArrow NoLabel TString TBool),
+            -- TODO: do we need anything for chars?
+            -- IO
+            ("print_endline", TArrow NoLabel TString TUnit),
+            ("read_line", TArrow NoLabel TUnit TString),
+            -- operators
+            ("+", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+            ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+            ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+            ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+            ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
+          ],
+      constructors = Data.Map.fromList [],
+      fields = Data.Map.fromList []
+    }
+
 empty :: SymbolTable
-empty = [emptyScope]
+empty = [initialScope]
 
 -- generic lookup/insert for one namespace
 -- either succeeds, or errors with an error message
