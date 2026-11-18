@@ -46,8 +46,6 @@ common warnings
 library frontend
   -- Import common warning flags.
   import: warnings
-  -- LANGUAGE extensions used by modules in this package.
-  -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
     array,
@@ -73,6 +71,10 @@ library frontend
 library intermediate
   -- Import common warning flags.
   import: warnings
+  -- LANGUAGE extensions used by modules in this package.
+  default-extensions:
+    DeriveTraversable
+
   build-depends:
     base ^>=4.20.2.0,
     containers,
@@ -82,6 +84,8 @@ library intermediate
   exposed-modules:
     Intermediate.SymbolTable
     Intermediate.Type
+    Intermediate.TypeAnnotator
+    Intermediate.TypedAst
 
   -- Directories containing source files.
   hs-source-dirs:
