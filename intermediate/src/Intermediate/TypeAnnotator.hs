@@ -82,12 +82,29 @@ lowerExpr expr =
       symtab <- gets symbolTable
       tp <- liftEither $ resolveValue symtab p
       return $ TEVar tp p
-    _ -> throwError "failed"
+    -- TODO: many things in between
+    Ast.ExprInfix op left right -> do
+      symtab <- gets symbolTable
+      opType <- liftEither $ resolveValue symtab (Ast.Path Nothing op)
+      typedLeft <- lowerExpr left
+      typedRight <- lowerExpr right
+      -- then need to unify op with leftType -> rightType -> a
+      output <- liftTypes $ newTypeVar
+      let rhs = TArrow NoLabel (exprAnnotation typedRight) (TVar output)
+          desiredType = TArrow NoLabel (exprAnnotation typedLeft) rhs
+      unifies <- liftTypes $ unify desiredType opType
+      if unifies
+        then
+          -- success
+          return $ TEApply (TVar output) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) NoLabel typedLeft) NoLabel typedRight
+        else
+          throwError "Type error: could not unify"
+    _ -> throwError "Not implemented"
 
 lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)
 lowerDefinition def =
   case def of
-    Ast.DefinitionType _typeDef -> throwError "failed"
+    Ast.DefinitionType _typeDef -> throwError "type definitions not implemented"
     Ast.DefinitionLet isRec letBindings -> do
       -- TODO: handle recursive bindings and multiple assignments
       -- since multiple assignments allow forward refs
