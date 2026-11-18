@@ -1,7 +1,8 @@
 module Intermediate.TypeAnnotator (lowerAndInfer) where
 
+import Control.Monad (when)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
-import Control.Monad.State (State, evalState, gets, runState, state)
+import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (partitionEithers)
 import qualified Frontend.Ast as Ast
 import Intermediate.SymbolTable
@@ -28,10 +29,12 @@ lowerAndInfer (Ast.Program _interface (Ast.UnitImplementation (implementation)))
         Just (Ast.ModuleItems moduleItems) -> moduleItems
         Nothing -> []
       inferState = InferState {symbolTable = empty, typeState = initialTypeVarState}
-      results = evalState (mapM (runExceptT . lowerDefinitionOrExpr) items) inferState
+      (results, finalState) = runState (mapM (runExceptT . lowerDefinitionOrExpr) items) inferState
       (lefts, rights) = partitionEithers results
    in case lefts of
-        [] -> Right $ TProgram rights
+        [] ->
+          -- finalize any annotations
+          return $ evalState (traverse resolveType (TProgram rights)) (typeState finalState)
         errors -> Left $ unlines errors
 
 lowerDefinitionOrExpr :: Ast.DefinitionOrExpr -> LowerAndInferM (TDefinition Type)
@@ -52,16 +55,16 @@ typeConstant constant =
     -- don't know what will be inside, so we store it as an 'a list / 'a array
     Ast.ConstantList -> do
       tvar <- liftTypes newTypeVar
-      return $ TCon "list" [tvar]
+      return $ TCon "list" [TVar tvar]
     Ast.ConstantArray -> do
       tvar <- liftTypes newTypeVar
-      return $ TCon "array" [tvar]
+      return $ TCon "array" [TVar tvar]
     -- TODO: implement these
     Ast.ConstantPolymorphicVariant _ -> throwError "polymorphic variants not implemented yet"
     Ast.ConstantVariant path -> do
       -- need to know where this variant name comes from
       symtab <- gets symbolTable
-      info <- liftEither $ resolveConstructor symtab (show path)
+      info <- liftEither $ resolveConstructor symtab path
       -- double check that it is a 0-arg constructor
       let expectedLength = length (constructorArgs info)
       if expectedLength == 0
@@ -74,7 +77,38 @@ lowerExpr expr =
     Ast.ExprConstant constant -> do
       t <- typeConstant constant
       return $ TEConstant t constant
+    Ast.ExprPath p -> do
+      -- look up where this value comes from
+      symtab <- gets symbolTable
+      tp <- liftEither $ resolveValue symtab p
+      return $ TEVar tp p
     _ -> throwError "failed"
 
 lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)
-lowerDefinition _def = throwError "failed"
+lowerDefinition def =
+  case def of
+    Ast.DefinitionType _typeDef -> throwError "failed"
+    Ast.DefinitionLet isRec letBindings -> do
+      -- TODO: handle recursive bindings and multiple assignments
+      -- since multiple assignments allow forward refs
+      when isRec $ throwError "recursive not implemented yet"
+      case letBindings of
+        [] -> error "Impossible"
+        _b1 : _b2 : _ -> throwError "Multiple bindings not implemented yet"
+        binding : [] ->
+          -- exactly 1 nonrecursive binding
+          case binding of
+            Ast.LetBindingPattern _pat _expr -> throwError "pattern lets not implemented yet"
+            Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = _tpExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
+              -- TODO - handle type expressions and functions
+              when (length params /= 0) $ throwError "functions not implemented"
+              -- then evaluate the expression
+              typedExpr <- lowerExpr expr
+              let exprType = exprAnnotation typedExpr
+              -- then just create and bind the type variable for our name
+              tVar <- liftTypes newTypeVar
+              liftTypes $ bindTypeVar tVar exprType
+              let tp = TVar tVar
+              modify (\s -> s {symbolTable = insertValue (symbolTable s) (Ast.Path Nothing name) tp})
+              -- then that's our output
+              return $ TDefinitionLet isRec [TLetBinding (TPVariable tp name) (typedExpr)]

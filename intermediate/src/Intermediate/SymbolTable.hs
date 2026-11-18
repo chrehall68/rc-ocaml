@@ -3,8 +3,8 @@ module Intermediate.SymbolTable
     ConstructorInfo (..),
     FieldInfo (..),
     empty,
-    resolve,
-    insert,
+    resolveValue,
+    insertValue,
     resolveConstructor,
     insertConstructor,
     resolveField,
@@ -15,6 +15,7 @@ module Intermediate.SymbolTable
 where
 
 import qualified Data.Map
+import Frontend.Ast (Path (..))
 import Intermediate.Type
 
 -- what we know about a variant constructor, e.g. for
@@ -102,38 +103,42 @@ empty = [initialScope]
 
 -- generic lookup/insert for one namespace
 -- either succeeds, or errors with an error message
-resolveIn :: (Scope -> Data.Map.Map String a) -> String -> SymbolTable -> String -> Either String a
+resolveIn :: (Scope -> Data.Map.Map String a) -> String -> SymbolTable -> Path -> Either String a
 resolveIn namespace kind table symbol = case table of
-  [] -> Left $ "No " ++ kind ++ " definition found in scope for " ++ symbol
+  [] -> Left $ "No " ++ kind ++ " definition found in scope for " ++ symbolName
   scope : rest ->
-    case Data.Map.lookup symbol (namespace scope) of
+    case Data.Map.lookup symbolName (namespace scope) of
       Just found -> Right found
       Nothing -> resolveIn namespace kind rest symbol
+  where
+    symbolName = pathToString symbol
 
-insertIn :: (Scope -> Data.Map.Map String a) -> (Scope -> Data.Map.Map String a -> Scope) -> SymbolTable -> String -> a -> SymbolTable
+insertIn :: (Scope -> Data.Map.Map String a) -> (Scope -> Data.Map.Map String a -> Scope) -> SymbolTable -> Path -> a -> SymbolTable
 insertIn namespace setNamespace table symbol value = case table of
   [] -> error "Bad use of symbol table; inserting into no scopes"
-  first : rest -> setNamespace first (Data.Map.insert symbol value (namespace first)) : rest
+  first : rest -> setNamespace first (Data.Map.insert symbolName value (namespace first)) : rest
+  where
+    symbolName = pathToString symbol
 
 -- value operations
-resolve :: SymbolTable -> String -> Either String Type
-resolve = resolveIn values "value"
+resolveValue :: SymbolTable -> Path -> Either String Type
+resolveValue = resolveIn values "value"
 
-insert :: SymbolTable -> String -> Type -> SymbolTable
-insert = insertIn values (\scope m -> scope {values = m})
+insertValue :: SymbolTable -> Path -> Type -> SymbolTable
+insertValue = insertIn values (\scope m -> scope {values = m})
 
 -- constructor operations
-resolveConstructor :: SymbolTable -> String -> Either String ConstructorInfo
+resolveConstructor :: SymbolTable -> Path -> Either String ConstructorInfo
 resolveConstructor = resolveIn constructors "constructor"
 
-insertConstructor :: SymbolTable -> String -> ConstructorInfo -> SymbolTable
+insertConstructor :: SymbolTable -> Path -> ConstructorInfo -> SymbolTable
 insertConstructor = insertIn constructors (\scope m -> scope {constructors = m})
 
 -- field operations
-resolveField :: SymbolTable -> String -> Either String FieldInfo
+resolveField :: SymbolTable -> Path -> Either String FieldInfo
 resolveField = resolveIn fields "field"
 
-insertField :: SymbolTable -> String -> FieldInfo -> SymbolTable
+insertField :: SymbolTable -> Path -> FieldInfo -> SymbolTable
 insertField = insertIn fields (\scope m -> scope {fields = m})
 
 -- scope operations
@@ -144,3 +149,9 @@ popScope :: SymbolTable -> SymbolTable
 popScope table = case table of
   [] -> error "Bad use of symbol table; should never happen"
   _ : rest -> rest
+
+pathToString :: Path -> String
+pathToString (Path prefixes name) =
+  case prefixes of
+    Nothing -> name
+    Just _ -> error "Modules not implemented yet"

@@ -53,11 +53,11 @@ runTypeVarM :: TypeVarM a -> a
 runTypeVarM m = evalState m initialTypeVarState
 
 -- creates a fresh, unbound type variable with a unique id
-newTypeVar :: TypeVarM Type
+newTypeVar :: TypeVarM TypeVar
 newTypeVar = do
   modify (\s -> s {lastUsedTypeId = lastUsedTypeId s + 1})
   newId <- gets lastUsedTypeId
-  return $ TVar TypeVar {typeVarId = newId}
+  return $ TypeVar {typeVarId = newId}
 
 -- binds a type var to a type
 -- assumes the type var is not already bound
