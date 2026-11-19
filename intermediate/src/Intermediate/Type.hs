@@ -29,7 +29,7 @@ data Type
     TUnit
   | TInt
   | TBool
-  | TDouble
+  | TFloat
   | TChar
   | TString
   | -- things that might need to get resolved
@@ -154,7 +154,7 @@ checkNotRecursive tVar t = do
     TUnit -> return ()
     TInt -> return ()
     TBool -> return ()
-    TDouble -> return ()
+    TFloat -> return ()
     TChar -> return ()
     TString -> return ()
     TArrow _ t1 t2 -> do

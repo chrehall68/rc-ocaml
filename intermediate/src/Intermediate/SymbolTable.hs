@@ -5,6 +5,8 @@ module Intermediate.SymbolTable
     empty,
     resolveValue,
     insertValue,
+    resolveType,
+    insertType,
     resolveConstructor,
     insertConstructor,
     resolveField,
@@ -16,7 +18,7 @@ where
 
 import qualified Data.Map
 import Frontend.Ast (Path (..))
-import Intermediate.Type
+import Intermediate.Type (ArgLabel (..), Type (..), TypeVar (..))
 
 -- what we know about a variant constructor, e.g. for
 -- type 'a option = None | Some of 'a
@@ -26,7 +28,7 @@ import Intermediate.Type
 data ConstructorInfo = ConstructorInfo
   { constructorParams :: [TypeVar],
     -- empty for constant constructors
-    constructorArgs :: Maybe Type,
+    constructorArgs :: [Type],
     constructorResult :: Type
   }
   deriving (Show, Eq)
@@ -48,6 +50,7 @@ data FieldInfo = FieldInfo
 -- uppercase
 data Scope = Scope
   { values :: Data.Map.Map String Type,
+    types :: Data.Map.Map String Type,
     constructors :: Data.Map.Map String ConstructorInfo,
     fields :: Data.Map.Map String FieldInfo
   }
@@ -58,7 +61,7 @@ data Scope = Scope
 type SymbolTable = [Scope]
 
 emptyScope :: Scope
-emptyScope = Scope {values = Data.Map.empty, constructors = Data.Map.empty, fields = Data.Map.empty}
+emptyScope = Scope {values = Data.Map.empty, constructors = Data.Map.empty, fields = Data.Map.empty, types = Data.Map.empty}
 
 -- predefined identifiers / constructs
 -- TODO: maybe this should be dependency injected since
@@ -71,13 +74,13 @@ initialScope =
           [ -- create strings
             ("string_of_int", TArrow NoLabel TInt TString),
             ("string_of_bool", TArrow NoLabel TBool TString),
-            ("string_of_float", TArrow NoLabel TDouble TString),
+            ("string_of_float", TArrow NoLabel TFloat TString),
             -- create ints
             ("int_of_string", TArrow NoLabel TString TInt),
-            ("int_of_float", TArrow NoLabel TDouble TInt),
+            ("int_of_float", TArrow NoLabel TFloat TInt),
             -- create floats
-            ("float_of_string", TArrow NoLabel TString TDouble),
-            ("float_of_int", TArrow NoLabel TInt TDouble),
+            ("float_of_string", TArrow NoLabel TString TFloat),
+            ("float_of_int", TArrow NoLabel TInt TFloat),
             -- create bool
             ("bool_of_string", TArrow NoLabel TString TBool),
             -- TODO: do we need anything for chars?
@@ -89,10 +92,10 @@ initialScope =
             ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
             ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
             ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("+.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
-            ("-.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
-            ("*.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
-            ("/.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
+            ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
             -- TODO: this should probably be polymorphic
             ( "<",
               TArrow
@@ -105,8 +108,15 @@ initialScope =
                 )
             )
           ],
-      constructors = Data.Map.fromList [],
-      fields = Data.Map.fromList []
+      constructors = Data.Map.empty,
+      fields = Data.Map.empty,
+      types =
+        Data.Map.fromList
+          [ ("int", TInt),
+            ("float", TFloat),
+            ("bool", TBool),
+            ("string", TString)
+          ]
     }
 
 empty :: SymbolTable
@@ -137,6 +147,13 @@ resolveValue = resolveIn values "value"
 
 insertValue :: SymbolTable -> Path -> Type -> SymbolTable
 insertValue = insertIn values (\scope m -> scope {values = m})
+
+-- value operations
+resolveType :: SymbolTable -> Path -> Either String Type
+resolveType = resolveIn types "type"
+
+insertType :: SymbolTable -> Path -> Type -> SymbolTable
+insertType = insertIn types (\scope m -> scope {types = m})
 
 -- constructor operations
 resolveConstructor :: SymbolTable -> Path -> Either String ConstructorInfo

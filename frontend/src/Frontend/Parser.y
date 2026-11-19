@@ -327,7 +327,7 @@ AppliedType
 
 AtomicType
   : Typeconstr                          { TypeName $1 }
-  | '_'                                 { TypeExpr }
+  | '_'                                 { TypeExprWildcard }
   | QUOTE LIDENT                        { TypeVariable $2 }
   | '(' TypeExpr ')'                    { $2 }
   | '(' TypeExpr ',' TypeExpr TypeArgumentsTail ')' Typeconstr
@@ -443,7 +443,7 @@ RecordPatternField
   | Field '=' Pattern                   { PatternField $1 Nothing $3 }
   | Field ':' TypeExpr '=' Pattern      { PatternField $1 (Just $3) $5 }
 PolyTypeExpr
-  : '}'             { TypeExpr }
+  : '}'             { TypeExprWildcard }
 
 -- 11.7 Expressions (https://ocaml.org/manual/5.3/expr.html)
 -- To avoid ambiguity, we've broken expressions up into tiers:
@@ -697,7 +697,7 @@ ModuleItems
 ModuleItemTail
   : {- empty -}                                 { [] }
   | many1(';;')                                 { [] }  -- allow for the trailing `;;`
-  | Definition ModuleItemTail                   { (Definition $1) : [] }
+  | Definition ModuleItemTail                   { (Definition $1) : $2 }
   | many1(';;') DefinitionOrExpr ModuleItemTail { $2 : $3 }
 
 

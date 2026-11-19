@@ -36,7 +36,7 @@ data Constant
   deriving (Show, Eq)
 
 data TypeExpr
-  = TypeExpr -- wildcard type _; fuller type syntax can be added incrementally
+  = TypeExprWildcard -- wildcard type _; fuller type syntax can be added incrementally
   | TypeName ExtendedPath
   | TypeVariable String
   | TypeArrow TypeExpr TypeExpr
