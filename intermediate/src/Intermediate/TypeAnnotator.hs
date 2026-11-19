@@ -4,7 +4,9 @@ import Control.Monad (when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
+import Data.Foldable (foldlM)
 import qualified Data.List.NonEmpty as NonEmpty
+import qualified Data.Map
 import qualified Frontend.Ast as Ast
 import qualified Intermediate.SymbolTable as SymTab
 import Intermediate.Type
@@ -101,6 +103,76 @@ withScopeRestore restoreOnSuccess action = do
 withScope :: LowerAndInferM a -> LowerAndInferM a
 withScope action = withScopeRestore True action
 
+-- unlabeled args (in call order), labeled args by label, optional (?label:) args by label
+type CallArgs = ([Ast.Expr], Data.Map.Map String Ast.Expr, Data.Map.Map String Ast.Expr)
+
+-- walks the function's arrow chain in parameter order, filling each parameter:
+--   - positional parameters consume the next unlabeled argument
+--   - labeled parameters look their argument up by label
+--   - omitted optional parameters become None if a positional argument follows
+applyCurriedFunction :: TExpr Type -> CallArgs -> LowerAndInferM (TExpr Type)
+applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
+  funcType <- liftTypes $ prune (exprAnnotation curriedFunc)
+  let noArgsLeft = null unlabeled && Data.Map.null labeled && Data.Map.null optional
+      -- apply the function to an already-typed argument and continue
+      applyTyped rhs typedArg remaining =
+        applyCurriedFunction (TEApply rhs curriedFunc typedArg) remaining
+      -- no argument for this parameter, but later ones have some
+      etaExpand label lhs rhs = do
+        v <- liftTypes newTypeVar
+        let name = "__arg" ++ show (typeVarId v)
+        body <- applyTyped rhs (TEVar lhs (Ast.Path Nothing name)) args
+        return $ TEFunction (exprAnnotation body) label Nothing [TCase (TPVariable lhs name) Nothing body]
+  case funcType of
+    TArrow label lhs rhs
+      -- partial application (or a complete one)
+      | noArgsLeft -> return curriedFunc
+      | otherwise -> case label of
+          NoLabel -> case unlabeled of
+            expr : rest -> do
+              typedExpr <- lowerExpr expr
+              unifyOrRollback lhs (exprAnnotation typedExpr)
+              applyTyped rhs typedExpr (rest, labeled, optional)
+            [] -> etaExpand label lhs rhs
+          Labeled name -> case Data.Map.lookup name labeled of
+            Just expr -> do
+              typedExpr <- lowerExpr expr
+              unifyOrRollback lhs (exprAnnotation typedExpr)
+              applyTyped rhs typedExpr (unlabeled, Data.Map.delete name labeled, optional)
+            Nothing -> etaExpand label lhs rhs
+          Optional name ->
+            case (Data.Map.lookup name optional, Data.Map.lookup name labeled) of
+              -- ?name:e passes the option directly
+              (Just expr, _) -> do
+                typedExpr <- lowerExpr expr
+                unifyOrRollback lhs (exprAnnotation typedExpr)
+                applyTyped rhs typedExpr (unlabeled, labeled, Data.Map.delete name optional)
+              -- ~name:e wraps the value in Some
+              (Nothing, Just expr) -> do
+                typedExpr <- lowerExpr expr
+                unifyOrRollback lhs (TCon "option" [exprAnnotation typedExpr])
+                let wrapped = TEVariant lhs (Ast.Path Nothing "Some") typedExpr
+                applyTyped rhs wrapped (unlabeled, Data.Map.delete name labeled, optional)
+              (Nothing, Nothing)
+                | not (null unlabeled) -> do
+                    -- a positional argument follows, so the optional is defaulted
+                    let none = TEConstant lhs (Ast.ConstantVariant (Ast.Path Nothing "None"))
+                    applyTyped rhs none args
+                | otherwise -> etaExpand label lhs rhs
+    -- we don't know anything about the function (e.g. a lambda parameter),
+    -- so ocaml assumes the call is purely positional
+    TVar _
+      | not (null unlabeled) && Data.Map.null labeled && Data.Map.null optional -> do
+          argVar <- liftTypes newTypeVar
+          resVar <- liftTypes newTypeVar
+          unifyOrRollback funcType (TArrow NoLabel (TVar argVar) (TVar resVar))
+          applyCurriedFunction curriedFunc args
+    _
+      -- successfully used all parameters
+      | noArgsLeft -> return curriedFunc
+      -- have remaining parameters but don't have a function type
+      | otherwise -> throwError $ "Could not apply all arguments to lhs. Remaining arguments: " ++ show unlabeled ++ " and labeled " ++ show labeled ++ " and optional " ++ show optional ++ " to lhs"
+
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
@@ -155,6 +227,27 @@ lowerExpr expr =
       -- everything worked
       return $ TEArray (TCon "array" [TVar innerVar]) typedElements
     -- TODO: implement the many other expr types between ExprPath and ExprInfix
+    Ast.ExprFunctionApplication func args -> do
+      typedFunc <- lowerExpr func
+      -- then the application needs to work
+      -- ~x / ?x without a value are punned for ~x:x / ?x:x
+      let punned name = maybe (Ast.ExprPath (Ast.Path Nothing name)) id
+          (unlabeled, labeledList, optionalList) =
+            foldr
+              ( \arg (unl, lab, opt) -> case arg of
+                  Ast.UnlabeledArgument e -> (e : unl, lab, opt)
+                  Ast.LabeledArgument a b -> (unl, (a, punned a b) : lab, opt)
+                  Ast.OptionalArgument a b -> (unl, lab, (a, punned a b) : opt)
+              )
+              ([], [], [])
+              args
+          labeled = Data.Map.fromList labeledList
+          optional = Data.Map.fromList optionalList
+      -- ocaml allows this for some reason, but we don't since it makes our life easier
+      when (Data.Map.size labeled /= length labeledList || Data.Map.size optional /= length optionalList) $
+        throwError "the same label was given more than once in a function application"
+      applyCurriedFunction typedFunc (unlabeled, labeled, optional)
+    -- TODO: Prefix
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable
       opType <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
@@ -165,7 +258,7 @@ lowerExpr expr =
       let rhs = TArrow NoLabel (exprAnnotation typedRight) (TVar outputType)
           desiredType = TArrow NoLabel (exprAnnotation typedLeft) rhs
       () <- unifyOrRollback desiredType opType
-      return $ TEApply (TVar outputType) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) NoLabel typedLeft) NoLabel typedRight
+      return $ TEApply (TVar outputType) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) typedLeft) typedRight
     -- TODO: implement the other things in between as well
     Ast.ExprIf {Ast.cond = cond, Ast.thenExpr = thenExpr, Ast.elseExpr = maybeElseExpr} -> do
       -- need cond to resolve to boolean

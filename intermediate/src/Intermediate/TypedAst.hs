@@ -38,10 +38,10 @@ data TExpr t
   | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
     TERecord t (Maybe (TExpr t)) [(Path, TExpr t)]
-  | -- function, how the argument is passed, argument
+  | -- function, argument
     -- labeled arguments are reordered to match the function's parameter order,
     -- and omitted optional arguments are filled in with None
-    TEApply t (TExpr t) ArgLabel (TExpr t)
+    TEApply t (TExpr t) (TExpr t)
   | TEFieldAccess t (TExpr t) Path
   | TEFieldAssignment t (TExpr t) Path (TExpr t)
   | -- if is cond then else
@@ -111,7 +111,7 @@ exprAnnotation e = case e of
   TECons t _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t
-  TEApply t _ _ _ -> t
+  TEApply t _ _ -> t
   TEFieldAccess t _ _ -> t
   TEFieldAssignment t _ _ _ -> t
   TEIf t _ _ _ -> t
