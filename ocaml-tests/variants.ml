@@ -9,3 +9,5 @@ let y = x
 let v = match x with
   | Some z -> z
   | None -> 34
+
+let (a,b,c) = (3,4,5)

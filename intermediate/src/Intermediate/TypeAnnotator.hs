@@ -3,7 +3,7 @@ module Intermediate.TypeAnnotator (lowerAndInfer) where
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
-import Data.Either (partitionEithers)
+import Data.Either (isRight, partitionEithers)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Frontend.Ast as Ast
 import qualified Intermediate.SymbolTable as SymTab
@@ -82,17 +82,24 @@ unifyOrRollback a b = do
       modify (\s -> s {typeState = originalState})
       throwError err
 
--- run an action inside a fresh symbol table scope. The scope is always
--- discarded afterwards, even if the action fails, so a failed definition
--- can't leave stale scopes behind for the definitions after it
-withScope :: LowerAndInferM a -> LowerAndInferM a
-withScope action = do
+-- create a new symbol table and discard it on failure
+-- on success, discard it only if `restoreOnSuccess` is true
+withScopeRestore :: Bool -> LowerAndInferM a -> LowerAndInferM a
+withScopeRestore restoreOnSuccess action = do
   savedTable <- gets symbolTable
   let restore = modify (\s -> s {symbolTable = savedTable})
   modify (\s -> s {symbolTable = SymTab.pushScope (symbolTable s)})
   result <- action `catchError` (\err -> restore >> throwError err)
-  restore
+  if restoreOnSuccess
+    then
+      restore
+    else
+      pure ()
   return result
+
+-- run action and discard scope afterward
+withScope :: LowerAndInferM a -> LowerAndInferM a
+withScope action = withScopeRestore True action
 
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
@@ -242,15 +249,20 @@ lowerExpr expr =
       return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
     _ -> throwError "Not implemented"
 
+-- doesn't create a new scope; you should probably create a scope  before using it
 -- if there are variables encountered, they'll be inserted into the current scope
--- TODO: maybe need to unify pattern with the thing it's matching against?
+-- if a variable is already bound in the current scope, this results in an error
 lowerAndInsertPattern :: Ast.Pattern -> LowerAndInferM (TPattern Type)
 lowerAndInsertPattern pat =
   case pat of
     Ast.PatternVariable name -> do
       tVar <- liftTypes newTypeVar
       let tp = TVar tVar
-      modify (\s -> s {symbolTable = (SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp)})
+      let pathName = (Ast.Path Nothing name)
+      symtab <- gets symbolTable
+      let exists = isRight $ SymTab.resolveValueInLast symtab pathName
+      when exists $ throwError $ "variable " ++ name ++ " bound multiple times in this pattern"
+      modify (\s -> s {symbolTable = (SymTab.insertValue (symbolTable s) pathName tp)})
       return $ TPVariable tp name
     Ast.PatternWildcard -> do
       tVar <- liftTypes newTypeVar
@@ -263,7 +275,11 @@ lowerAndInsertPattern pat =
       typedInner <- lowerAndInsertPattern innerPat
       tVar <- liftTypes newTypeVar
       let tp = TVar tVar
-      modify (\s -> s {symbolTable = (SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp)})
+      let pathName = (Ast.Path Nothing name)
+      symtab <- gets symbolTable
+      let exists = isRight $ SymTab.resolveValueInLast symtab pathName
+      when exists $ throwError $ "variable " ++ name ++ " bound multiple times in this pattern"
+      modify (\s -> s {symbolTable = (SymTab.insertValue (symbolTable s) pathName tp)})
       -- then need name to unify the name with the thing it's aliasing
       unifyOrRollback tp (patternAnnotation typedInner)
       return $ TPAlias tp typedInner name
@@ -389,7 +405,13 @@ lowerAndInsertBindings isRec letBindings = do
     binding : [] ->
       -- exactly 1 nonrecursive binding
       case binding of
-        Ast.LetBindingPattern _pat _expr -> throwError "pattern lets not implemented yet"
+        Ast.LetBindingPattern pat expr -> withScopeRestore False $ do
+          -- need to evaluate expression first
+          typedExpr <- lowerExpr expr
+          -- then can lower / insert the pattern
+          typedPat <- lowerAndInsertPattern pat
+          unifyOrRollback (patternAnnotation typedPat) (exprAnnotation typedExpr)
+          return $ [TLetBinding typedPat typedExpr]
         Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = typeExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
           -- TODO - handle type expressions and functions
           when (length params /= 0) $ throwError "functions not implemented"

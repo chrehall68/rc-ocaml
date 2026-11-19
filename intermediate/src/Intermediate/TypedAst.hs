@@ -1,6 +1,8 @@
 -- typed AST produced by type checking
 -- every node carries an annotation t (which holds the in-progress or resolved Type).
 -- This allows automatic traversal (since Traversable requires this kind)
+-- Note: while the typed AST guarantees types match up,
+-- it doesn't guarantee that matches are exhaustive
 
 -- We also lower some language constructs:
 --   - f a b                     -> TEApply (TEApply f a) b

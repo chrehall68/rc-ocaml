@@ -4,6 +4,7 @@ module Intermediate.SymbolTable
     FieldInfo (..),
     empty,
     resolveValue,
+    resolveValueInLast,
     insertValue,
     resolveType,
     insertType,
@@ -144,6 +145,9 @@ insertIn namespace setNamespace table symbol value = case table of
 -- value operations
 resolveValue :: SymbolTable -> Path -> Either String Type
 resolveValue = resolveIn values "value"
+
+resolveValueInLast :: SymbolTable -> Path -> Either String Type
+resolveValueInLast tab = resolveIn values "value" [head tab]
 
 insertValue :: SymbolTable -> Path -> Type -> SymbolTable
 insertValue = insertIn values (\scope m -> scope {values = m})

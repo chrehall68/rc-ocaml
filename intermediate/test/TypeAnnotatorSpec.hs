@@ -1,5 +1,6 @@
 module TypeAnnotatorSpec (spec) where
 
+import Data.List (isInfixOf)
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
 import Intermediate.Type
@@ -21,6 +22,11 @@ typeOf :: String -> String -> Either String Type
 typeOf name src = do
   tps <- bindingTypes src
   maybe (Left $ "no binding named " ++ name) Right (lookup name tps)
+
+-- fails with an error message containing the given text
+failsWith :: String -> Either String a -> Bool
+failsWith text (Left msg) = text `isInfixOf` msg
+failsWith _ _ = False
 
 isLeft' :: Either a b -> Bool
 isLeft' (Left _) = True
@@ -80,10 +86,10 @@ spec = do
 
   describe "for loops" $ do
     it "types a to loop as unit" $
-      typeOf "r" "let r = for i = 1 to 10 do i + 1; () done"
+      typeOf "r" "let r = for i = 1 to 10 do if i < 2 then () else () done"
         `shouldBe` Right TUnit
     it "types a downto loop as unit" $
-      typeOf "r" "let r = for i = 10 downto 1 do i + 1; () done"
+      typeOf "r" "let r = for i = 10 downto 1 do if i < 2 then () else () done"
         `shouldBe` Right TUnit
     it "keeps the loop as a TEFor node" $ do
       TProgram defs <- either fail return (infer "let r = for i = 1 to 3 do () done")
@@ -124,3 +130,43 @@ spec = do
     it "doesn't let a variant alias accept other types" $
       infer "type nonrec c = Red | Green\ntype nonrec d = c\nlet x : d = 1"
         `shouldSatisfy` isLeft'
+
+  describe "variables bound twice in one pattern" $ do
+    let dup = failsWith "multiple times"
+    it "rejects a repeated name in a tuple pattern" $ do
+      infer "let (a, a) = (1, 2)" `shouldSatisfy` dup
+      infer "let r = match (1, 2) with | (a, a) -> a" `shouldSatisfy` dup
+    it "rejects a repeated name across a cons pattern" $
+      infer "let r = match [1] with | h :: h -> h | _ -> 0" `shouldSatisfy` dup
+    it "rejects a repeated name in a list pattern" $
+      infer "let r = match [1; 2] with | [a; a] -> a | _ -> 0" `shouldSatisfy` dup
+    it "rejects an alias that reuses a name from inside the pattern" $ do
+      infer "let r = match (1, 2) with | ((a, b) as a) -> 0" `shouldSatisfy` dup
+      infer "let r = match 1 with | (z as z) -> z" `shouldSatisfy` dup
+    it "rejects a repeated name inside a constructor argument" $
+      infer "type nonrec p = Pair of int * int\nlet r = match Pair (1, 2) with | Pair (a, a) -> a"
+        `shouldSatisfy` dup
+    it "accepts distinct names" $
+      typeOf "r" "let r = match (1, 2) with | (a, b) -> a + b" `shouldBe` Right TInt
+    it "accepts the same name in different match cases" $
+      typeOf "r" "let r = match 1 with | 0 -> 0 | x -> x" `shouldBe` Right TInt
+    it "accepts repeated wildcards" $
+      typeOf "r" "let r = match (1, 2, 3) with | (_, _, c) -> c" `shouldBe` Right TInt
+
+  describe "shadowing" $ do
+    -- shadowing something from an outer scope is not "bound twice in this pattern"
+    it "lets a pattern variable shadow an earlier let" $
+      typeOf "r" "let x = 1\nlet r = match \"s\" with | x -> x" `shouldBe` Right TString
+    it "lets a pattern variable shadow a builtin" $
+      typeOf "r" "let (print_endline, b) = (1, 2)\nlet r = print_endline + b"
+        `shouldBe` Right TInt
+    it "lets a later top-level pattern rebind an earlier name" $
+      typeOf "r" "let (a, b) = (1, 2)\nlet (a, c) = (\"s\", 4)\nlet r = a" `shouldBe` Right TString
+    it "lets a match shadow a variable from an enclosing match" $
+      typeOf "r" "let r = match 1 with | x -> (match \"s\" with | x -> x)" `shouldBe` Right TString
+
+  describe "sequences" $ do
+    it "types a sequence as its right-hand side" $
+      typeOf "r" "let r = (); 1" `shouldBe` Right TInt
+    it "rejects a non-unit left-hand side" $
+      infer "let r = 1; 2" `shouldSatisfy` isLeft'
