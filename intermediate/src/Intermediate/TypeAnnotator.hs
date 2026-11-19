@@ -4,6 +4,7 @@ import Control.Monad (when)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (partitionEithers)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Frontend.Ast as Ast
 import Intermediate.SymbolTable
 import Intermediate.Type
@@ -66,10 +67,9 @@ typeConstant constant =
       symtab <- gets symbolTable
       info <- liftEither $ resolveConstructor symtab path
       -- double check that it is a 0-arg constructor
-      let expectedLength = length (constructorArgs info)
-      if expectedLength == 0
-        then return $ constructorResult info
-        else throwError $ "constructor " ++ show path ++ " expects " ++ show expectedLength ++ " arguments, but was called with 0"
+      case constructorArgs info of
+        Nothing -> return $ constructorResult info
+        Just expected -> throwError $ "constructor " ++ show path ++ " expects " ++ show expected ++ " as an argument, but was called without any arguments"
 
 unifyOrRollback :: Type -> Type -> LowerAndInferM ()
 unifyOrRollback a b = do
@@ -93,6 +93,42 @@ lowerExpr expr =
       symtab <- gets symbolTable
       tp <- liftEither $ resolveValue symtab p
       return $ TEVar tp p
+    Ast.ExprNonconstantVariant {Ast.constr = constr, Ast.expr = expr} -> do
+      symtab <- gets symbolTable
+      constrInfo <- liftEither $ resolveConstructor symtab constr
+      case constructorArgs constrInfo of
+        Nothing -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
+        Just expected -> do
+          typedExpr <- lowerExpr expr
+          unifyOrRollback expected (exprAnnotation typedExpr)
+          throwError "bad"
+    Ast.ExprNonconstantPolymorphicVariant _ _ -> do throwError "Polymorphic variants not supported yet"
+    -- TODO: annotated
+    Ast.ExprTuple first second rest -> do
+      first' <- lowerExpr first
+      second' <- lowerExpr second
+      rest' <- mapM lowerExpr rest
+      let tupleType = map exprAnnotation (first' : second' : rest')
+      return $ TETuple (TTuple tupleType) first' second' rest'
+    Ast.ExprCons elements -> do
+      typedElements <- mapM lowerExpr elements
+      -- now we need the last element to be a list
+      let lastElem = NonEmpty.last typedElements
+      innerVar <- liftTypes newTypeVar
+      let desiredType = TCon "list" [TVar innerVar]
+      unifyOrRollback desiredType (exprAnnotation lastElem)
+      -- and then we need all the elements to be unifiable to each other
+      -- but don't include last one since that is type list 'a
+      mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) (NonEmpty.init typedElements)
+      -- now construct cons from this
+      return $ foldr (\newHead accum -> TECons desiredType newHead accum) lastElem (NonEmpty.init typedElements)
+    Ast.ExprArray elements -> do
+      typedElements <- mapM lowerExpr elements
+      -- then all need to unify together
+      innerVar <- liftTypes newTypeVar
+      mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) typedElements
+      -- everything worked
+      return $ TEArray (TCon "array" [TVar innerVar]) typedElements
     -- TODO: implement the many other expr types between ExprPath and ExprInfix
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable

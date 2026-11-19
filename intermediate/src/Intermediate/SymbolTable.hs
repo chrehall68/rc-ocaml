@@ -26,7 +26,7 @@ import Intermediate.Type
 data ConstructorInfo = ConstructorInfo
   { constructorParams :: [TypeVar],
     -- empty for constant constructors
-    constructorArgs :: [Type],
+    constructorArgs :: Maybe Type,
     constructorResult :: Type
   }
   deriving (Show, Eq)
