@@ -49,6 +49,9 @@ main = hspec $ describe "generateJasmin" $ do
   it "rejects invalid class names before rendering" $
     generateJasmin "example//Program" (TProgram []) `shouldBe` Left "Invalid JVM class name \"example//Program\""
 
+  it "rejects unqualified names that could be Jasmin keywords" $
+    generateJasmin "return" (TProgram []) `shouldBe` Left "Invalid JVM class name \"return\""
+
 generateExpressions :: [TExpr Type] -> Either String String
 generateExpressions = generateJasmin "Program" . TProgram . map TDefinitionExpr
 

@@ -10,9 +10,14 @@ import Intermediate.Type (ArgLabel (..), Type (..))
 import Intermediate.TypedAst
 import Numeric (showHex)
 
--- | Emit a Jasmin class with a static main method.
--- The class name uses JVM internal form, for example "example/Program".
--- Unsupported typed AST nodes return an error.
+-- | Emit a Jasmin class with a static main method. The class name uses JVM
+-- internal form (for example, "example/Program"). Start an unqualified
+-- class name with an uppercase letter, '_' or '$' to avoid Jasmin keywords.
+-- Top-level definitions run in order, and their bindings are local to main.
+--
+-- The backend supports primitive values, empty collections, variable and
+-- wildcard bindings, control flow, and selected predefined functions. Other
+-- constructs return an error until their JVM representations are defined.
 generateJasmin :: String -> TProgram Type -> Either String String
 generateJasmin className (TProgram definitions) = do
   unless (validClassName className) $ Left ("Invalid JVM class name " ++ show className)
@@ -29,14 +34,15 @@ generateJasmin className (TProgram definitions) = do
     ] ++ render code ["  return", ".end method"]
 
 validClassName :: String -> Bool
-validClassName name = case break (== '/') name of
-  ([], _) -> False
-  (first : rest, suffix) ->
-    identifierStart first && all (\c -> identifierStart c || isDigit c) rest
-      && case suffix of
-        [] -> True
-        _ : remaining -> validClassName remaining
+validClassName = validPart False
   where
+    validPart qualified name = case break (== '/') name of
+      ([], _) -> False
+      (first : rest, suffix) ->
+        identifierStart first && all (\c -> identifierStart c || isDigit c) rest
+          && case suffix of
+            [] -> qualified || not (isAsciiLower first)
+            _ : remaining -> validPart True remaining
     identifierStart c = isAsciiLower c || isAsciiUpper c || c == '_' || c == '$'
 
 -- Stack heights are measured in JVM slots. Double and long use two slots.
