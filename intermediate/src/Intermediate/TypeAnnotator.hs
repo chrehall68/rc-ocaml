@@ -141,6 +141,57 @@ lowerExpr expr =
           desiredType = TArrow NoLabel (exprAnnotation typedLeft) rhs
       () <- unifyOrRollback desiredType opType
       return $ TEApply (TVar outputType) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) NoLabel typedLeft) NoLabel typedRight
+    -- TODO: implement the other things in between as well
+    Ast.ExprIf {Ast.cond = cond, Ast.thenExpr = thenExpr, Ast.elseExpr = maybeElseExpr} -> do
+      -- need cond to resolve to boolean
+      typedCond <- lowerExpr cond
+      unifyOrRollback (exprAnnotation typedCond) TBool
+      -- and the then/else need to unify too
+      typedThen <- lowerExpr thenExpr
+      let elseExpr = case maybeElseExpr of
+            Just elseExpr -> elseExpr
+            -- can only omit the "else" if the "if" evaluates to ()
+            Nothing -> Ast.ExprConstant Ast.ConstantUnit
+      typedElse <- lowerExpr elseExpr
+      unifyOrRollback (exprAnnotation typedThen) (exprAnnotation typedElse)
+      return $ TEIf (exprAnnotation typedThen) typedCond typedThen typedElse
+    Ast.ExprWhile {Ast.cond = cond, Ast.body = expr} -> do
+      -- technically the ocaml compiler will give a warning if body doesn't
+      -- unify to unit. we opt to make it an error
+      -- TODO: maybe support compiler warnings
+      typedCon <- lowerExpr cond
+      unifyOrRollback (exprAnnotation typedCon) TBool
+      typedExpr <- lowerExpr expr
+      unifyOrRollback (exprAnnotation typedExpr) TUnit
+      return $ TEWhile TUnit typedCon typedExpr
+    Ast.ExprFor {Ast.valueName = loopVar, Ast.start = start, Ast.end = end, Ast.body = body, Ast.isTo = isTo} -> do
+      let comparisonOp = if isTo then "<" else ">"
+          endValName = loopVar ++ "$ending"
+          transformed =
+            ( Ast.ExprLet
+                False
+                [Ast.LetBindingTyped {Ast.letValueName = loopVar, Ast.params = [], Ast.typeExpression = Nothing, Ast.coercedType = Nothing, Ast.expr1 = start}]
+                ( Ast.ExprLet
+                    False
+                    [Ast.LetBindingTyped {Ast.letValueName = endValName, Ast.params = [], Ast.typeExpression = Nothing, Ast.coercedType = Nothing, Ast.expr1 = end}]
+                    (Ast.ExprWhile (Ast.ExprInfix {Ast.op = comparisonOp, Ast.left = Ast.ExprPath (Ast.Path Nothing loopVar), Ast.right = Ast.ExprPath (Ast.Path Nothing endValName)}) body)
+                )
+            )
+      lowerExpr transformed
+    -- TODO: things between
+    Ast.ExprSequence left right -> do
+      -- both should be valid, but only result of right is returned
+      loweredLeft <- lowerExpr left
+      loweredRight <- lowerExpr right
+      return $ TESequence (exprAnnotation loweredRight) loweredLeft loweredRight
+    Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
+      -- then need to insert these bindings into the symbol table
+      modify (\s -> s {symbolTable = pushScope (symbolTable s)})
+      loweredBindings <- lowerAndInsertBindings isRec letBindings
+      loweredInExpr <- lowerExpr inExpr
+      -- then pop that scope before returning
+      modify (\s -> s {symbolTable = popScope (symbolTable s)})
+      return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
     _ -> throwError "Not implemented"
 
 lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)
@@ -148,26 +199,32 @@ lowerDefinition def =
   case def of
     Ast.DefinitionType _typeDef -> throwError "type definitions not implemented"
     Ast.DefinitionLet isRec letBindings -> do
-      -- TODO: handle recursive bindings and multiple assignments
-      -- since multiple assignments allow forward refs
-      when isRec $ throwError "recursive not implemented yet"
-      case letBindings of
-        [] -> error "Impossible"
-        _b1 : _b2 : _ -> throwError "Multiple bindings not implemented yet"
-        binding : [] ->
-          -- exactly 1 nonrecursive binding
-          case binding of
-            Ast.LetBindingPattern _pat _expr -> throwError "pattern lets not implemented yet"
-            Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = _tpExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
-              -- TODO - handle type expressions and functions
-              when (length params /= 0) $ throwError "functions not implemented"
-              -- then evaluate the expression
-              typedExpr <- lowerExpr expr
-              let exprType = exprAnnotation typedExpr
-              -- then just create and bind the type variable for our name
-              tVar <- liftTypes newTypeVar
-              liftTypes $ bindTypeVar tVar exprType
-              let tp = TVar tVar
-              modify (\s -> s {symbolTable = insertValue (symbolTable s) (Ast.Path Nothing name) tp})
-              -- then that's our output
-              return $ TDefinitionLet isRec [TLetBinding (TPVariable tp name) (typedExpr)]
+      loweredBindings <- lowerAndInsertBindings isRec letBindings
+      return $ TDefinitionLet isRec loweredBindings
+
+-- in the process of lowering the bindings, also inserts the bindings into the symbol table
+lowerAndInsertBindings :: Bool -> [Ast.LetBinding] -> LowerAndInferM [TLetBinding Type]
+lowerAndInsertBindings isRec letBindings = do
+  -- TODO: handle recursive bindings and multiple assignments
+  -- since multiple assignments allow forward refs
+  when isRec $ throwError "recursive not implemented yet"
+  case letBindings of
+    [] -> error "impossible"
+    _b1 : _b2 : _ -> throwError "Multiple bindings not implemented yet"
+    binding : [] ->
+      -- exactly 1 nonrecursive binding
+      case binding of
+        Ast.LetBindingPattern _pat _expr -> throwError "pattern lets not implemented yet"
+        Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = _tpExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
+          -- TODO - handle type expressions and functions
+          when (length params /= 0) $ throwError "functions not implemented"
+          -- then evaluate the expression
+          typedExpr <- lowerExpr expr
+          let exprType = exprAnnotation typedExpr
+          -- then just create and bind the type variable for our name
+          tVar <- liftTypes newTypeVar
+          liftTypes $ bindTypeVar tVar exprType
+          let tp = TVar tVar
+          modify (\s -> s {symbolTable = insertValue (symbolTable s) (Ast.Path Nothing name) tp})
+          -- then that's our output
+          return $ [TLetBinding (TPVariable tp name) (typedExpr)]

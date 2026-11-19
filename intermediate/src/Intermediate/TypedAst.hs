@@ -42,11 +42,12 @@ data TExpr t
     TEApply t (TExpr t) ArgLabel (TExpr t)
   | TEFieldAccess t (TExpr t) Path
   | TEFieldAssignment t (TExpr t) Path (TExpr t)
-  | TEIf t (TExpr t) (TExpr t) (TExpr t)
-  | TEWhile t (TExpr t) (TExpr t)
-  | -- loop variable, start, end, isTo, body
-    TEFor t String (TExpr t) (TExpr t) Bool (TExpr t)
-  | TESequence t (TExpr t) (TExpr t)
+  | -- if is cond then else
+    TEIf t (TExpr t) (TExpr t) (TExpr t)
+  | -- while is cond body
+    TEWhile t (TExpr t) (TExpr t)
+  | -- left right
+    TESequence t (TExpr t) (TExpr t)
   | TEMatch t (TExpr t) [TCase t]
   | -- a one-argument function that matches its argument against the cases
     -- the default is only present for optional parameters, e.g. ?(x = 1)
@@ -111,7 +112,6 @@ exprAnnotation e = case e of
   TEFieldAssignment t _ _ _ -> t
   TEIf t _ _ _ -> t
   TEWhile t _ _ -> t
-  TEFor t _ _ _ _ _ -> t
   TESequence t _ _ -> t
   TEMatch t _ _ -> t
   TEFunction t _ _ _ -> t

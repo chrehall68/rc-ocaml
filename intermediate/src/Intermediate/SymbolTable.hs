@@ -92,7 +92,18 @@ initialScope =
             ("+.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
             ("-.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
             ("*.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
-            ("/.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble))
+            ("/.", TArrow NoLabel TDouble (TArrow NoLabel TDouble TDouble)),
+            -- TODO: this should probably be polymorphic
+            ( "<",
+              TArrow
+                NoLabel
+                (TVar (TypeVar (-1)))
+                ( TArrow
+                    NoLabel
+                    (TVar (TypeVar (-2)))
+                    TBool
+                )
+            )
           ],
       constructors = Data.Map.fromList [],
       fields = Data.Map.fromList []
