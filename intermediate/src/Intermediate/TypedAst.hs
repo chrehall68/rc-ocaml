@@ -46,6 +46,8 @@ data TExpr t
     TEIf t (TExpr t) (TExpr t) (TExpr t)
   | -- while is cond body
     TEWhile t (TExpr t) (TExpr t)
+  | -- loop variable, start, end, isTo, body
+    TEFor t String (TExpr t) (TExpr t) Bool (TExpr t)
   | -- left right
     TESequence t (TExpr t) (TExpr t)
   | TEMatch t (TExpr t) [TCase t]
@@ -112,6 +114,7 @@ exprAnnotation e = case e of
   TEFieldAssignment t _ _ _ -> t
   TEIf t _ _ _ -> t
   TEWhile t _ _ -> t
+  TEFor t _ _ _ _ _ -> t
   TESequence t _ _ -> t
   TEMatch t _ _ -> t
   TEFunction t _ _ _ -> t

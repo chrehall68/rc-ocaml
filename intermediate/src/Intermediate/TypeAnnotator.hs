@@ -1,7 +1,7 @@
 module Intermediate.TypeAnnotator (lowerAndInfer) where
 
 import Control.Monad (when)
-import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (partitionEithers)
 import qualified Data.List.NonEmpty as NonEmpty
@@ -82,6 +82,18 @@ unifyOrRollback a b = do
       modify (\s -> s {typeState = originalState})
       throwError err
 
+-- run an action inside a fresh symbol table scope. The scope is always
+-- discarded afterwards, even if the action fails, so a failed definition
+-- can't leave stale scopes behind for the definitions after it
+withScope :: LowerAndInferM a -> LowerAndInferM a
+withScope action = do
+  savedTable <- gets symbolTable
+  let restore = modify (\s -> s {symbolTable = savedTable})
+  modify (\s -> s {symbolTable = SymTab.pushScope (symbolTable s)})
+  result <- action `catchError` (\err -> restore >> throwError err)
+  restore
+  return result
+
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
@@ -105,7 +117,11 @@ lowerExpr expr =
           unifyOrRollback (TTuple args) (exprAnnotation typedExpr)
       return $ TEVariant (SymTab.constructorResult constrInfo) constr typedExpr
     Ast.ExprNonconstantPolymorphicVariant _ _ -> do throwError "Polymorphic variants not supported yet"
-    -- TODO: annotated
+    Ast.ExprAnnotated expr typeExpr -> do
+      typedExpr <- lowerExpr expr
+      desiredType <- lowerTypeExpr typeExpr
+      unifyOrRollback (exprAnnotation typedExpr) desiredType
+      return typedExpr
     Ast.ExprTuple first second rest -> do
       first' <- lowerExpr first
       second' <- lowerExpr second
@@ -167,36 +183,62 @@ lowerExpr expr =
       unifyOrRollback (exprAnnotation typedExpr) TUnit
       return $ TEWhile TUnit typedCon typedExpr
     Ast.ExprFor {Ast.valueName = loopVar, Ast.start = start, Ast.end = end, Ast.body = body, Ast.isTo = isTo} -> do
-      let comparisonOp = if isTo then "<" else ">"
-          endValName = loopVar ++ "$ending"
-          transformed =
-            ( Ast.ExprLet
-                False
-                [Ast.LetBindingTyped {Ast.letValueName = loopVar, Ast.params = [], Ast.typeExpression = Nothing, Ast.coercedType = Nothing, Ast.expr1 = start}]
-                ( Ast.ExprLet
-                    False
-                    [Ast.LetBindingTyped {Ast.letValueName = endValName, Ast.params = [], Ast.typeExpression = Nothing, Ast.coercedType = Nothing, Ast.expr1 = end}]
-                    (Ast.ExprWhile (Ast.ExprInfix {Ast.op = comparisonOp, Ast.left = Ast.ExprPath (Ast.Path Nothing loopVar), Ast.right = Ast.ExprPath (Ast.Path Nothing endValName)}) body)
-                )
-            )
-      lowerExpr transformed
+      -- bounds must be ints
+      typedStart <- lowerExpr start
+      unifyOrRollback (exprAnnotation typedStart) TInt
+      typedEnd <- lowerExpr end
+      unifyOrRollback (exprAnnotation typedEnd) TInt
+      -- the loop variable is an int, and is only visible inside the body
+      typedBody <- withScope $ do
+        modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing loopVar) TInt})
+        typedBody <- lowerExpr body
+        -- like while, we make a non-unit body an error instead of a warning
+        unifyOrRollback (exprAnnotation typedBody) TUnit
+        return typedBody
+      return $ TEFor TUnit loopVar typedStart typedEnd isTo typedBody
     -- TODO: things between
     Ast.ExprSequence left right -> do
       -- both should be valid, but only result of right is returned
+      -- and left should be unit (technically ocaml gives warnings if not)
+      -- TODO: implement warnings
       loweredLeft <- lowerExpr left
+      unifyOrRollback (exprAnnotation loweredLeft) TUnit
       loweredRight <- lowerExpr right
       return $ TESequence (exprAnnotation loweredRight) loweredLeft loweredRight
     Ast.ExprMatch {Ast.expr = expr, Ast.cases = cases} -> do
       -- every pattern must unify with our expr
-      -- TODO
-      throwError "bad"
+      typedExpr <- lowerExpr expr
+      let exprType = exprAnnotation typedExpr
+      returnedTpVar <- liftTypes newTypeVar
+      let returnedTp = TVar returnedTpVar
+      typedCases <-
+        mapM
+          ( \(pat, guard, body) -> withScope $ do
+              -- then for every case, we need to unify our expression with
+              -- the pattern in question
+              typedPat <- lowerAndInsertPattern pat
+              unifyOrRollback (patternAnnotation typedPat) exprType
+              -- and need to make sure the guard works and is a boolean
+              typedGuard <- case guard of
+                Just g -> do
+                  typedG <- lowerExpr g
+                  unifyOrRollback (exprAnnotation typedG) TBool
+                  return $ Just typedG
+                Nothing -> return Nothing
+              -- and then need the body to work too and unify with our return type
+              typedBody <- lowerExpr body
+              unifyOrRollback (exprAnnotation typedBody) returnedTp
+              return $ TCase typedPat typedGuard typedBody
+          )
+          cases
+      return $ TEMatch returnedTp typedExpr typedCases
     Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
       -- then need to insert these bindings into the symbol table
-      modify (\s -> s {symbolTable = SymTab.pushScope (symbolTable s)})
-      loweredBindings <- lowerAndInsertBindings isRec letBindings
-      loweredInExpr <- lowerExpr inExpr
-      -- then pop that scope before returning
-      modify (\s -> s {symbolTable = SymTab.popScope (symbolTable s)})
+      -- (in their own scope, which is dropped after the body)
+      (loweredBindings, loweredInExpr) <- withScope $ do
+        loweredBindings <- lowerAndInsertBindings isRec letBindings
+        loweredInExpr <- lowerExpr inExpr
+        return (loweredBindings, loweredInExpr)
       return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
     _ -> throwError "Not implemented"
 
@@ -243,6 +285,23 @@ lowerAndInsertPattern pat =
         args -> do
           unifyOrRollback (TTuple args) (patternAnnotation typedInner)
       return $ TPVariant (SymTab.constructorResult constrInfo) constrPath typedInner
+    -- TODO: handle PatternType?
+    Ast.PatternTuple elements -> do
+      typedElems <- mapM lowerAndInsertPattern elements
+      let elemTypes = map patternAnnotation typedElems
+      return $ TPTuple (TTuple elemTypes) typedElems
+    Ast.PatternCons lhs rhs -> do
+      -- rhs must be a list
+      typedLhs <- lowerAndInsertPattern lhs
+      typedRhs <- lowerAndInsertPattern rhs
+      let desiredRhs = TCon "list" [(patternAnnotation typedLhs)]
+      unifyOrRollback desiredRhs (patternAnnotation typedRhs)
+      return $ TPCons desiredRhs typedLhs typedRhs
+    Ast.PatternList elems -> do
+      -- transform to cons with an empty list
+      let toReduce = foldr (\lhs rhs -> Ast.PatternCons lhs rhs) (Ast.PatternConstant Ast.ConstantList) elems
+      lowerAndInsertPattern toReduce
+    -- TODO: handle the rest of the patterns
     _ -> throwError "bad"
 
 -- TODO: handle these in a better way
@@ -287,31 +346,34 @@ lowerDefinition def =
         (Ast.TypeDef params name equation repr constraints) : [] -> do
           when (length params > 0) $ throwError "polymorphism not supported yet"
           when (length constraints > 0) $ throwError "constraints not supported yet"
-          tVar <- liftTypes newTypeVar
-          let tp = TVar tVar
-              pathName = Ast.Path Nothing name
-          case (equation, repr) of
-            (Nothing, Nothing) ->
-              -- empty type, nothing to do
-              pure ()
-            (Just eq, Nothing) -> do
-              -- need to unify with desired
-              desired <- lowerTypeExpr eq
-              unifyOrRollback tp desired
-            (Nothing, Just rep) ->
-              case rep of
-                Ast.TypeVariant constructors -> do
-                  mapM_
-                    ( \(Ast.ConstrDecl constrName typeExprs) -> do
-                        desiredTypes <- mapM lowerTypeExpr typeExprs
-                        let constrPathName = Ast.Path Nothing constrName
-                            info = SymTab.ConstructorInfo {SymTab.constructorParams = [], SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
-                        modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) constrPathName info})
-                        return ()
-                    )
-                    constructors
-                Ast.TypeRecord fields -> throwError "todo"
-            (Just eq, Just rep) -> throwError "re-exporting types not supported yet"
+          let pathName = Ast.Path Nothing name
+          tp <-
+            case (equation, repr) of
+              (Nothing, Nothing) ->
+                -- empty type, nothing to do
+                return $ TCon name []
+              (Just eq, Nothing) -> do
+                -- acts as a type alias, so just unify it with the desired
+                tVar <- liftTypes newTypeVar
+                desired <- lowerTypeExpr eq
+                unifyOrRollback (TVar tVar) desired
+                return $ TVar tVar
+              (Nothing, Just rep) ->
+                case rep of
+                  Ast.TypeVariant constructors -> do
+                    let tp = TCon name []
+                    mapM_
+                      ( \(Ast.ConstrDecl constrName typeExprs) -> do
+                          desiredTypes <- mapM lowerTypeExpr typeExprs
+                          let constrPathName = Ast.Path Nothing constrName
+                              info = SymTab.ConstructorInfo {SymTab.constructorParams = [], SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
+                          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) constrPathName info})
+                          return ()
+                      )
+                      constructors
+                    return $ tp
+                  Ast.TypeRecord fields -> throwError "todo"
+              (Just eq, Just rep) -> throwError "re-exporting types not supported yet"
           modify (\s -> s {symbolTable = SymTab.insertType (symbolTable s) pathName tp})
           return $ TDefinitionType definition
 
@@ -338,11 +400,11 @@ lowerAndInsertBindings isRec letBindings = do
           tVar <- liftTypes newTypeVar
           liftTypes $ bindTypeVar tVar exprType
           let tp = TVar tVar
-          modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp})
           -- but also it should conform to our typeExpr
           unifyWith <- case typeExpr of
             Just tpExpr -> lowerTypeExpr tpExpr
             Nothing -> return tp
           unifyOrRollback unifyWith tp
-          -- then that's our output
+          -- now everything checked out, so put it into our symbol table and return it
+          modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp})
           return $ [TLetBinding (TPVariable tp name) (typedExpr)]

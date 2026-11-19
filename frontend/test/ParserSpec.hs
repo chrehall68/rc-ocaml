@@ -701,7 +701,7 @@ spec = do
     it "parses a return type constraint" $
       parseExpr "fun 1 : _ -> a"
         `shouldBe` Right
-          (ExprLambda {parameters = [ParameterPattern (intPat 1)], typeConstraint = Just TypeExpr, body = a})
+          (ExprLambda {parameters = [ParameterPattern (intPat 1)], typeConstraint = Just TypeExprWildcard, body = a})
     it "extends the body as far as possible" $
       parseExpr "fun 1 -> a; b"
         `shouldBe` Right (lambda [ParameterPattern (intPat 1)] (ExprSequence {left = a, right = b}))
@@ -716,22 +716,22 @@ spec = do
     it "parses labeled parameters" $ do
       parseExpr "fun ~x -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
       parseExpr "fun ~(x) -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
-      parseExpr "fun ~(x : _) -> a" `shouldBe` Right (lambda [ParameterLabel "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ~(x : _) -> a" `shouldBe` Right (lambda [ParameterLabel "x" (Just TypeExprWildcard) Nothing] a)
       parseExpr "fun ~x:1 -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing (Just (intPat 1))] a)
     it "parses optional parameters" $ do
       parseExpr "fun ?x -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
       parseExpr "fun ?(x) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
-      parseExpr "fun ?(x : _) -> a" `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ?(x : _) -> a" `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) Nothing] a)
       parseExpr "fun ?(x = b) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just b)] a)
       parseExpr "fun ?(x : _ = b) -> a"
-        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just b)] a)
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) (Just b)] a)
     it "parses optional parameters with patterns" $ do
       parseExpr "fun ?x:1 -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
       parseExpr "fun ?x:(1) -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
       parseExpr "fun ?x:(1 : _ = b) -> a"
-        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just b)] a)
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExprWildcard) (Just b)] a)
     -- each expected tree below matches what `ocamlc -stop-after parsing -dsource` prints
     it "takes a whole sequence as an optional parameter's default" $ do
       let c = var "c"
@@ -740,11 +740,11 @@ spec = do
       parseExpr "fun ?(x = b; c) -> a"
         `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b c))] a)
       parseExpr "fun ?(x : _ = b; c) -> a"
-        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just (seqE b c))] a)
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) (Just (seqE b c))] a)
       parseExpr "fun ?x:(1 = b; c) -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing (Just (seqE b c))] a)
       parseExpr "fun ?x:(1 : _ = b; c) -> a"
-        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just (seqE b c))] a)
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExprWildcard) (Just (seqE b c))] a)
       parseExpr "fun ?(x = b; c; d) -> a"
         `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b (seqE c d)))] a)
     it "takes any expression as an optional parameter's default" $ do
@@ -811,8 +811,8 @@ spec = do
     it "allows a trailing ; at the top level" $
       exprsOf "a; ;; b;" `shouldBe` Right [a, b]
     it "allows a trailing ; before a type annotation" $ do
-      parseExpr "(a; : _)" `shouldBe` Right (ExprAnnotated {expr = a, typeExpr = TypeExpr})
-      parseExpr "(a; b : _)" `shouldBe` Right (ExprAnnotated {expr = seqE a b, typeExpr = TypeExpr})
+      parseExpr "(a; : _)" `shouldBe` Right (ExprAnnotated {expr = a, typeExpr = TypeExprWildcard})
+      parseExpr "(a; b : _)" `shouldBe` Right (ExprAnnotated {expr = seqE a b, typeExpr = TypeExprWildcard})
     it "allows a trailing ; in conditions and loops" $ do
       parseExpr "if a; then b" `shouldBe` Right (ExprIf {cond = a, thenExpr = b, elseExpr = Nothing})
       parseExpr "while a; do b; done" `shouldBe` Right (ExprWhile {cond = a, body = b})
@@ -923,7 +923,7 @@ spec = do
 
   describe "type annotations" $ do
     it "parses the _ placeholder type" $
-      parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExpr})
+      parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExprWildcard})
     it "parses named type annotations" $
       parseExpr "(x : t)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeName (ExtendedPath Nothing "t")})
     it "parses polymorphic function annotations" $

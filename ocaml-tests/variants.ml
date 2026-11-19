@@ -1,8 +1,11 @@
 type nonrec t = Some of int | None
 
 type nonrec t2 = Pair of int * int | Triple of int * float * int
+type nonrec t3 = t
 
-let x = Some 33
+let x: t3 = Some 33
 let y = x
-(* should fail *)
-let my_pair = Pair (3, 4, 5.6)
+
+let v = match x with
+  | Some z -> z
+  | None -> 34
