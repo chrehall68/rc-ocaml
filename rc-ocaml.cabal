@@ -117,7 +117,8 @@ executable rc-ocaml
   build-depends:
     base ^>=4.20.2.0,
     rc-ocaml:frontend,
-    rc-ocaml:intermediate
+    rc-ocaml:intermediate,
+    rc-ocaml:backend
 
   -- Directories containing source files.
   hs-source-dirs: exe

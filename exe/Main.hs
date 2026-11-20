@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Backend.Jasmin (generateJasmin)
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
 import Intermediate.TypeAnnotator (lowerAndInfer)
@@ -18,8 +19,10 @@ main :: IO ()
 main = do
   source <- getContents
   tokens <- orExit $ alexScanTokens source
-  print tokens
+  -- print tokens
   ast <- orExit $ parse tokens
-  print ast
+  -- print ast
   typedAst <- orExit $ lowerAndInfer ast
-  print typedAst
+  -- print typedAst
+  jasminCode <- orExit $ generateJasmin "Thingy" typedAst
+  putStrLn jasminCode

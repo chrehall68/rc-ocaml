@@ -28,14 +28,17 @@ generateJasmin className (TProgram definitions) = do
   when (locals > 65535 || peak code > 65535) $ Left "JVM method exceeds the stack or locals limit"
   let body = render code ["  return"]
   validateBytecode body
-  pure $ unlines $
-    [ ".class public " ++ className,
-      ".super java/lang/Object",
-      "",
-      ".method public static main([Ljava/lang/String;)V",
-      "  .limit stack " ++ show (peak code),
-      "  .limit locals " ++ show locals
-    ] ++ body ++ [".end method"]
+  pure $
+    unlines $
+      [ ".class public " ++ className,
+        ".super java/lang/Object",
+        "",
+        ".method public static main([Ljava/lang/String;)V",
+        "  .limit stack " ++ show (peak code),
+        "  .limit locals " ++ show locals
+      ]
+        ++ body
+        ++ [".end method"]
 
 validClassName :: String -> Bool
 validClassName = validPart False
@@ -43,7 +46,8 @@ validClassName = validPart False
     validPart qualified name = case break (== '/') name of
       ([], _) -> False
       (first : rest, suffix) ->
-        identifierStart first && all (\c -> identifierStart c || isDigit c) rest
+        identifierStart first
+          && all (\c -> identifierStart c || isDigit c) rest
           && case suffix of
             [] -> qualified || not (isAsciiLower first)
             _ : remaining -> validPart True remaining
@@ -84,9 +88,28 @@ bytecodeSize line
       _ -> Left ("Unknown JVM instruction size for " ++ line)
   where
     oneByte =
-      [ "return", "pop", "pop2", "lcmp", "ladd", "lsub", "lmul", "ldiv",
-        "dadd", "dsub", "dmul", "ddiv", "dneg", "l2d", "lshl", "lshr",
-        "lconst_1", "dconst_0", "dconst_1", "iconst_0", "iconst_1", "aconst_null"
+      [ "return",
+        "pop",
+        "pop2",
+        "lcmp",
+        "ladd",
+        "lsub",
+        "lmul",
+        "ldiv",
+        "dadd",
+        "dsub",
+        "dmul",
+        "ddiv",
+        "dneg",
+        "l2d",
+        "lshl",
+        "lshr",
+        "lconst_1",
+        "dconst_0",
+        "dconst_1",
+        "iconst_0",
+        "iconst_1",
+        "aconst_null"
       ]
     localAccess = ["iload", "istore", "lload", "lstore", "dload", "dstore", "aload", "astore"]
 
@@ -95,10 +118,11 @@ bytecodeSize line
 data Code = Code {delta :: Int, peak :: Int, render :: [String] -> [String]}
 
 instance Semigroup Code where
-  first <> second = Code
-    (delta first + delta second)
-    (max (peak first) (delta first + peak second))
-    (render first . render second)
+  first <> second =
+    Code
+      (delta first + delta second)
+      (max (peak first) (delta first + peak second))
+      (render first . render second)
 
 instance Monoid Code where
   mempty = Code 0 0 id
@@ -112,8 +136,11 @@ label name = Code 0 0 ((name ++ ":") :)
 -- The first arm ends in a jump. The second starts at the same incoming
 -- height as the first, and their result types agree at the join.
 alternatives :: Code -> Code -> Code
-alternatives first second = Code
-  (delta second) (max (peak first) (peak second)) (render first . render second)
+alternatives first second =
+  Code
+    (delta second)
+    (max (peak first) (peak second))
+    (render first . render second)
 
 data ValueKind = UnitValue | IntValue | LongValue | DoubleValue | RefValue
 
@@ -138,17 +165,20 @@ width valueKind = case valueKind of
   RefValue -> 1
 
 data Local = Local Type ValueKind Int
+
 type Env = Map.Map String Local
 
 data Supply = Supply {nextLocal :: Int, nextLabel :: Int}
+
 type Emit = StateT Supply (Either String)
 
 reject :: String -> Emit a
 reject feature = lift (Left ("Jasmin backend does not support " ++ feature))
 
 requireType :: Type -> Type -> Emit ()
-requireType expected actual = unless (expected == actual) $
-  lift (Left ("Expected " ++ show expected ++ " but received " ++ show actual ++ " in lowered AST"))
+requireType expected actual =
+  unless (expected == actual) $
+    lift (Left ("Expected " ++ show expected ++ " but received " ++ show actual ++ " in lowered AST"))
 
 -- Polymorphic list/array bindings can be instantiated at different element
 -- types. Their element type is erased by the current JVM representation.
@@ -248,17 +278,24 @@ emitExpr env expression = case expression of
     test <- emitExpected env TBool condition
     yesCode <- emitExpected env ty yes
     noCode <- emitExpected env ty no
-    pure $ test <> instruction (-1) ("ifeq " ++ elseLabel)
-      <> alternatives (yesCode <> instruction 0 ("goto " ++ endLabel)) (label elseLabel <> noCode)
-      <> label endLabel
+    pure $
+      test
+        <> instruction (-1) ("ifeq " ++ elseLabel)
+        <> alternatives (yesCode <> instruction 0 ("goto " ++ endLabel)) (label elseLabel <> noCode)
+        <> label endLabel
   TEWhile ty condition body -> do
     requireType TUnit ty
     start <- freshLabel
     end <- freshLabel
     test <- emitExpected env TBool condition
     bodyCode <- emitExpected env TUnit body
-    pure $ label start <> test <> instruction (-1) ("ifeq " ++ end)
-      <> bodyCode <> instruction 0 ("goto " ++ start) <> label end
+    pure $
+      label start
+        <> test
+        <> instruction (-1) ("ifeq " ++ end)
+        <> bodyCode
+        <> instruction 0 ("goto " ++ start)
+        <> label end
   TEFor ty name first lastValue increasing body -> do
     requireType TUnit ty
     startCode <- emitExpected env TInt first
@@ -273,16 +310,26 @@ emitExpr env expression = case expression of
         compareBounds = load counter <> load bound <> instruction (-3) "lcmp"
         outOfRange = if increasing then "ifgt " else "iflt "
         update = if increasing then "ladd" else "lsub"
-    pure $ startCode <> store counter <> endCode <> store bound
-      <> compareBounds <> instruction (-1) (outOfRange ++ end)
-      <> label start <> bodyCode
-      <> compareBounds <> instruction (-1) ("ifeq " ++ end)
-      <> load counter <> instruction 2 "lconst_1" <> instruction (-2) update <> store counter
-      <> instruction 0 ("goto " ++ start) <> label end
+    pure $
+      startCode
+        <> store counter
+        <> endCode
+        <> store bound
+        <> compareBounds
+        <> instruction (-1) (outOfRange ++ end)
+        <> label start
+        <> bodyCode
+        <> compareBounds
+        <> instruction (-1) ("ifeq " ++ end)
+        <> load counter
+        <> instruction 2 "lconst_1"
+        <> instruction (-2) update
+        <> store counter
+        <> instruction 0 ("goto " ++ start)
+        <> label end
   TEVariant {} -> reject "variants"
   TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
-  TECons {} -> reject "nonempty lists"
   TEArray {} -> reject "nonempty arrays"
   TERecord {} -> reject "records"
   TEFieldAccess {} -> reject "record field access"
@@ -294,7 +341,8 @@ emitExpr env expression = case expression of
 emitApply :: Env -> TExpr Type -> Emit Code
 emitApply env application = case application of
   TEApply result (TEApply _ (TEVar _ (Path Nothing name)) left) right
-    | Map.notMember name env, Just (ty, opcode) <- Map.lookup name arithmetic -> do
+    | Map.notMember name env,
+      Just (ty, opcode) <- Map.lookup name arithmetic -> do
         requireType ty result
         leftCode <- emitExpected env ty left
         rightCode <- emitExpected env ty right
@@ -304,59 +352,71 @@ emitApply env application = case application of
         "print_endline" -> do
           requireType TUnit result
           code <- emitExpected env TString argument
-          pure $ instruction 1 "getstatic java/lang/System/out Ljava/io/PrintStream;"
-            <> code <> instruction (-2) "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
+          pure $
+            instruction 1 "getstatic java/lang/System/out Ljava/io/PrintStream;"
+              <> code
+              <> instruction (-2) "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
         "string_of_int" -> conversion result argument TInt TString (-1) "invokestatic java/lang/Long/toString(J)Ljava/lang/String;"
         "string_of_bool" -> conversion result argument TBool TString 0 "invokestatic java/lang/Boolean/toString(Z)Ljava/lang/String;"
         "float_of_int" -> conversion result argument TInt TFloat 0 "l2d"
         _ -> reject ("application of " ++ show name)
   _ -> reject "general function application"
   where
-    arithmetic = Map.fromList
-      [ ("+", (TInt, "ladd")), ("-", (TInt, "lsub")), ("*", (TInt, "lmul")), ("/", (TInt, "ldiv")),
-        ("+.", (TFloat, "dadd")), ("-.", (TFloat, "dsub")), ("*.", (TFloat, "dmul")), ("/.", (TFloat, "ddiv"))
-      ]
-    normalizeInt TInt = instruction 1 "iconst_1" <> instruction (-1) "lshl"
-      <> instruction 1 "iconst_1" <> instruction (-1) "lshr"
+    arithmetic =
+      Map.fromList
+        [ ("+", (TInt, "ladd")),
+          ("-", (TInt, "lsub")),
+          ("*", (TInt, "lmul")),
+          ("/", (TInt, "ldiv")),
+          ("+.", (TFloat, "dadd")),
+          ("-.", (TFloat, "dsub")),
+          ("*.", (TFloat, "dmul")),
+          ("/.", (TFloat, "ddiv"))
+        ]
+    normalizeInt TInt =
+      instruction 1 "iconst_1"
+        <> instruction (-1) "lshl"
+        <> instruction 1 "iconst_1"
+        <> instruction (-1) "lshr"
     normalizeInt _ = mempty
     conversion result argument from to change opcode = do
       requireType to result
       code <- emitExpected env from argument
       pure (code <> instruction change opcode)
 
-emitConstant :: Type -> Constant -> Emit Code
+emitConstant :: Type -> TConstant -> Emit Code
 emitConstant ty constant = case constant of
-  ConstantInt (IntLiteral number Unspecified) -> do
+  TConstInt (IntLiteral number Unspecified) -> do
     let n = toInteger number
     when (n < negate (2 ^ (62 :: Int)) || n >= 2 ^ (62 :: Int)) $
       lift (Left ("Integer outside signed 63-bit range: " ++ show n))
-    literal TInt 2 (show n ++ "L")
-  ConstantInt _ -> reject "integer literals with an explicit size suffix"
-  ConstantDouble number
+    literal TInt 2 (show n) -- we don't actually need the L part
+  TConstInt _ -> reject "integer literals with an explicit size suffix"
+  TConstDouble number
     | isNaN number -> floatingDivision "dconst_0" "dconst_0"
     | isInfinite number -> do
         code <- floatingDivision "dconst_1" "dconst_0"
         pure (code <> if number < 0 then instruction 0 "dneg" else mempty)
     | otherwise -> literal TFloat 2 (show number)
-  ConstantChar character
+  TConstChar character
     | ord character <= 255 -> literal TChar 1 (show (ord character))
     | otherwise -> reject "character literals outside the OCaml byte range"
-  ConstantString value -> do
+  TConstString value -> do
     let (size, quoted) = jasminString value
     when (size > 65535) $ lift (Left "String literal exceeds the JVM constant pool entry limit")
     literal TString 1 quoted
-  ConstantBool boolean -> do
+  TConstBool boolean -> do
     requireType TBool ty
     pure (instruction 1 (if boolean then "iconst_1" else "iconst_0"))
-  ConstantUnit -> requireType TUnit ty >> pure mempty
-  ConstantList -> case ty of
-    TCon "list" [_] -> pure (instruction 1 "aconst_null")
-    _ -> reject ("empty list with type " ++ show ty)
-  ConstantArray -> case ty of
+  TConstUnit -> requireType TUnit ty >> pure mempty
+  -- ConstantList -> case ty of
+  --   TCon "list" [_] -> pure (instruction 1 "aconst_null")
+  --   _ -> reject ("empty list with type " ++ show ty)
+  TConstEmptyArray -> case ty of
     TCon "array" [_] -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
     _ -> reject ("empty array with type " ++ show ty)
-  ConstantVariant _ -> reject "variant constants"
-  ConstantPolymorphicVariant _ -> reject "polymorphic variant constants"
+  TConstVariant _ -> reject "variant constants"
+  TConstPolymorphicVariant _ -> reject "polymorphic variant constants"
   where
     literal expected slots operand = do
       requireType expected ty
