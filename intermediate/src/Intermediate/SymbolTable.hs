@@ -92,7 +92,8 @@ polymorphicValues :: Data.Map.Map String TypeScheme
 polymorphicValues =
   let a = TypeVar (-1)
    in Data.Map.fromList
-        [ ("<", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool)))
+        [ ("<", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool))),
+          ("==", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool)))
         ]
 
 -- predefined identifiers / constructs
@@ -126,6 +127,7 @@ initialScope =
                 ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("mod", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
