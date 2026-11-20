@@ -4,9 +4,11 @@ import Control.Monad (when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
+import Data.List ((\\))
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Set
 import qualified Frontend.Ast as Ast
 import Intermediate.SymbolTable (envFreeVars)
 import qualified Intermediate.SymbolTable as SymTab
@@ -15,7 +17,9 @@ import Intermediate.TypedAst
 
 type OrError x = Either String x
 
-data InferState = InferState {symbolTable :: SymTab.SymbolTable, typeState :: TypeVarState}
+-- namedTypeVars are the 'a-style variables written in the current top-level definition
+-- they're shared across the whole definition, so every 'a means the same type variable
+data InferState = InferState {symbolTable :: SymTab.SymbolTable, typeState :: TypeVarState, namedTypeVars :: Data.Map.Map String TypeVar}
 
 -- like the previous State OrError, but without as much lifting required
 type LowerAndInferM = ExceptT String (State InferState)
@@ -32,7 +36,7 @@ lowerAndInfer (Ast.Program _interface (Ast.UnitImplementation (implementation)))
   let items = case implementation of
         Just (Ast.ModuleItems moduleItems) -> moduleItems
         Nothing -> []
-      inferState = InferState {symbolTable = SymTab.empty, typeState = initialTypeVarState}
+      inferState = InferState {symbolTable = SymTab.empty, typeState = initialTypeVarState, namedTypeVars = Data.Map.empty}
       (results, finalState) = runState (mapM (runExceptT . lowerDefinitionOrExpr) items) inferState
       (lefts, rights) = partitionEithers results
    in case lefts of
@@ -42,7 +46,9 @@ lowerAndInfer (Ast.Program _interface (Ast.UnitImplementation (implementation)))
         errors -> Left $ unlines errors
 
 lowerDefinitionOrExpr :: Ast.DefinitionOrExpr -> LowerAndInferM (TDefinition Type)
-lowerDefinitionOrExpr defOrExpr =
+lowerDefinitionOrExpr defOrExpr = do
+  -- 'a only means the same thing within one top-level definition
+  modify (\s -> s {namedTypeVars = Data.Map.empty})
   case defOrExpr of
     Ast.Definition d -> lowerDefinition d
     Ast.Expr e -> TDefinitionExpr <$> lowerExpr e
@@ -69,10 +75,23 @@ typeConstant constant =
       -- need to know where this variant name comes from
       symtab <- gets symbolTable
       info <- liftEither $ SymTab.resolveConstructor symtab path
+      (args, result) <- instantiateConstructor info
       -- double check that it is a 0-arg constructor
-      case SymTab.constructorArgs info of
-        [] -> return $ SymTab.constructorResult info
+      case args of
+        [] -> return result
         expected -> throwError $ "constructor " ++ show path ++ " expects " ++ show expected ++ " as an argument, but was called without any arguments"
+
+-- constructors of polymorphic types get fresh type variables at each use,
+-- returns the argument types and the result type
+instantiateConstructor :: SymTab.ConstructorInfo -> LowerAndInferM ([Type], Type)
+instantiateConstructor info = do
+  let params = Data.Set.fromList (SymTab.constructorParams info)
+      -- instantiate everything together so they share the same fresh variables
+      packed = TTuple (SymTab.constructorResult info : SymTab.constructorArgs info)
+  unpacked <- liftTypes $ instantiate (Forall params packed)
+  case unpacked of
+    TTuple (result : args) -> return (args, result)
+    _ -> error "impossible"
 
 unifyOrRollback :: Type -> Type -> LowerAndInferM ()
 unifyOrRollback a b = do
@@ -191,13 +210,14 @@ lowerExpr expr =
       symtab <- gets symbolTable
       constrInfo <- liftEither $ SymTab.resolveConstructor symtab constr
       typedExpr <- lowerExpr expr
-      case SymTab.constructorArgs constrInfo of
+      (constrArgs, constrResult) <- instantiateConstructor constrInfo
+      case constrArgs of
         [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
         arg : [] -> do
           unifyOrRollback arg (exprAnnotation typedExpr)
         args -> do
           unifyOrRollback (TTuple args) (exprAnnotation typedExpr)
-      return $ TEVariant (SymTab.constructorResult constrInfo) constr typedExpr
+      return $ TEVariant constrResult constr typedExpr
     Ast.ExprNonconstantPolymorphicVariant _ _ -> do throwError "Polymorphic variants not supported yet"
     Ast.ExprAnnotated expr typeExpr -> do
       typedExpr <- lowerExpr expr
@@ -465,14 +485,15 @@ lowerAndInsertPattern pat =
       symtab <- gets symbolTable
       constrInfo <- liftEither $ SymTab.resolveConstructor symtab constrPath
       typedInner <- lowerAndInsertPattern innerPat
-      case SymTab.constructorArgs constrInfo of
+      (constrArgs, constrResult) <- instantiateConstructor constrInfo
+      case constrArgs of
         [] -> throwError $ "constructor " ++ show constrPath ++ " expects no arguments, but was invoked on arguments"
         arg : [] -> do
           -- need inner pat to unify with expected type
           unifyOrRollback arg (patternAnnotation typedInner)
         args -> do
           unifyOrRollback (TTuple args) (patternAnnotation typedInner)
-      return $ TPVariant (SymTab.constructorResult constrInfo) constrPath typedInner
+      return $ TPVariant constrResult constrPath typedInner
     -- TODO: handle PatternType?
     Ast.PatternTuple elements -> do
       typedElems <- mapM lowerAndInsertPattern elements
@@ -504,12 +525,15 @@ lowerTypeExpr typeExpr =
   case typeExpr of
     Ast.TypeExprWildcard ->
       TVar <$> liftTypes newTypeVar
-    Ast.TypeName extendedPath -> do
-      normalizedPath <- extendedPathToPath extendedPath
-      -- look up in symbol table
-      symtab <- gets symbolTable
-      liftEither $ SymTab.resolveType symtab normalizedPath
-    -- TODO: Ast.TypeVariable
+    Ast.TypeName extendedPath -> lowerTypeApplication [] extendedPath
+    Ast.TypeVariable name -> do
+      named <- gets namedTypeVars
+      case Data.Map.lookup name named of
+        Just var -> return $ TVar var
+        Nothing -> do
+          var <- liftTypes newTypeVar
+          modify (\s -> s {namedTypeVars = Data.Map.insert name var (namedTypeVars s)})
+          return $ TVar var
     Ast.TypeArrow lhs rhs -> do
       tLhs <- lowerTypeExpr lhs
       tRhs <- lowerTypeExpr rhs
@@ -517,8 +541,19 @@ lowerTypeExpr typeExpr =
     Ast.TypeTuple tupleTypes -> do
       types <- mapM lowerTypeExpr tupleTypes
       return $ TTuple types
-    -- TODO: type application
-    _ -> throwError "bad"
+    Ast.TypeApplication args extendedPath -> lowerTypeApplication args extendedPath
+
+-- a type name applied to its arguments (possibly none), e.g. `int option`
+lowerTypeApplication :: [Ast.TypeExpr] -> Ast.ExtendedPath -> LowerAndInferM Type
+lowerTypeApplication argExprs extendedPath = do
+  normalizedPath <- extendedPathToPath extendedPath
+  symtab <- gets symbolTable
+  SymTab.TypeInfo params body <- liftEither $ SymTab.resolveType symtab normalizedPath
+  when (length params /= length argExprs) $
+    throwError $
+      "type " ++ show normalizedPath ++ " expects " ++ show (length params) ++ " argument(s), but was given " ++ show (length argExprs)
+  args <- mapM lowerTypeExpr argExprs
+  liftTypes $ substituteTypes (Data.Map.fromList (zip params args)) body
 
 lowerDefinition :: Ast.Definition -> LowerAndInferM (TDefinition Type)
 lowerDefinition def =
@@ -531,38 +566,43 @@ lowerDefinition def =
       case typedefs of
         [] -> error "impossible"
         _t1 : _t2 : _ -> throwError "multiple typedefs not implemented yet"
-        (Ast.TypeDef params name equation repr constraints) : [] -> do
-          when (length params > 0) $ throwError "polymorphism not supported yet"
+        (Ast.TypeDef paramNames name equation repr constraints) : [] -> do
           when (length constraints > 0) $ throwError "constraints not supported yet"
+          when (length paramNames /= length (Data.Set.fromList paramNames)) $ throwError $ "type " ++ name ++ " has a repeated type parameter"
           let pathName = Ast.Path Nothing name
-          tp <-
+          -- each parameter is a type variable, which 'a in the body refers to
+          paramVars <- mapM (const $ liftTypes newTypeVar) paramNames
+          modify (\s -> s {namedTypeVars = Data.Map.fromList (zip paramNames paramVars)})
+          let tp = TCon name (map TVar paramVars)
+          body <-
             case (equation, repr) of
               (Nothing, Nothing) ->
                 -- empty type, nothing to do
-                return $ TCon name []
-              (Just eq, Nothing) -> do
-                -- acts as a type alias, so just unify it with the desired
-                tVar <- liftTypes newTypeVar
-                desired <- lowerTypeExpr eq
-                unifyOrRollback (TVar tVar) desired
-                return $ TVar tVar
+                return tp
+              (Just eq, Nothing) ->
+                -- acts as a type alias
+                lowerTypeExpr eq
               (Nothing, Just rep) ->
                 case rep of
                   Ast.TypeVariant constructors -> do
-                    let tp = TCon name []
                     mapM_
                       ( \(Ast.ConstrDecl constrName typeExprs) -> do
                           desiredTypes <- mapM lowerTypeExpr typeExprs
                           let constrPathName = Ast.Path Nothing constrName
-                              info = SymTab.ConstructorInfo {SymTab.constructorParams = [], SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
+                              info = SymTab.ConstructorInfo {SymTab.constructorParams = paramVars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
                           modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) constrPathName info})
                           return ()
                       )
                       constructors
-                    return $ tp
-                  Ast.TypeRecord fields -> throwError "todo"
-              (Just eq, Just rep) -> throwError "re-exporting types not supported yet"
-          modify (\s -> s {symbolTable = SymTab.insertType (symbolTable s) pathName tp})
+                    return tp
+                  Ast.TypeRecord _fields -> throwError "todo"
+              (Just _eq, Just _rep) -> throwError "re-exporting types not supported yet"
+          -- the body can only mention the declared parameters
+          used <- gets namedTypeVars
+          let unbound = Data.Map.keys used \\ paramNames
+          when (not (null unbound)) $ throwError $ "unbound type parameter '" ++ head unbound ++ " in definition of " ++ name
+          modify (\s -> s {namedTypeVars = Data.Map.empty})
+          modify (\s -> s {symbolTable = SymTab.insertType (symbolTable s) pathName (SymTab.TypeInfo paramVars body)})
           return $ TDefinitionType definition
 
 -- in the process of lowering the bindings, also inserts the bindings into the symbol table

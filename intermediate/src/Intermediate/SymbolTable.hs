@@ -1,6 +1,7 @@
 module Intermediate.SymbolTable
   ( SymbolTable,
     ConstructorInfo (..),
+    TypeInfo (..),
     FieldInfo (..),
     empty,
     resolveValue,
@@ -50,12 +51,22 @@ data FieldInfo = FieldInfo
   }
   deriving (Show, Eq)
 
+-- what we know about a type name, e.g. for type 'a option = ...
+-- the params are ['a] and the body is 'a option; writing `int option`
+-- substitutes the arguments for the params in the body
+-- (a plain type like int has no params)
+data TypeInfo = TypeInfo
+  { typeParams :: [TypeVar],
+    typeBody :: Type
+  }
+  deriving (Show, Eq)
+
 -- yes, ocaml actually allows types / values to have same names
 -- won't have same names as constructors though bc those are forced to be
 -- uppercase
 data Scope = Scope
   { values :: Data.Map.Map String TypeScheme,
-    types :: Data.Map.Map String Type,
+    types :: Data.Map.Map String TypeInfo,
     constructors :: Data.Map.Map String ConstructorInfo,
     fields :: Data.Map.Map String FieldInfo
   }
@@ -115,15 +126,29 @@ initialScope =
             ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
             ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
           ],
-      constructors = Data.Map.empty,
+      constructors =
+        let a = TypeVar (-1)
+            option = TCon "option" [TVar a]
+         in Data.Map.fromList
+              [ ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
+                ("Some", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a], constructorResult = option})
+              ],
       fields = Data.Map.empty,
       types =
-        Data.Map.fromList
-          [ ("int", TInt),
-            ("float", TFloat),
-            ("bool", TBool),
-            ("string", TString)
-          ]
+        let a = TypeVar (-1)
+            -- a builtin type constructor of one parameter
+            unary name = TypeInfo [a] (TCon name [TVar a])
+         in Data.Map.fromList
+              [ ("int", TypeInfo [] TInt),
+                ("float", TypeInfo [] TFloat),
+                ("bool", TypeInfo [] TBool),
+                ("string", TypeInfo [] TString),
+                ("unit", TypeInfo [] TUnit),
+                ("char", TypeInfo [] TChar),
+                ("list", unary "list"),
+                ("array", unary "array"),
+                ("option", unary "option")
+              ]
     }
 
 empty :: SymbolTable
@@ -187,10 +212,10 @@ envFreeVars table = do
       (`Data.Set.difference` quantified) <$> freeTypeVars tp
 
 -- value operations
-resolveType :: SymbolTable -> Path -> Either String Type
+resolveType :: SymbolTable -> Path -> Either String TypeInfo
 resolveType = resolveIn types "type"
 
-insertType :: SymbolTable -> Path -> Type -> SymbolTable
+insertType :: SymbolTable -> Path -> TypeInfo -> SymbolTable
 insertType = insertIn types (\scope m -> scope {types = m})
 
 -- constructor operations

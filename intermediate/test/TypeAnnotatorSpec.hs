@@ -244,3 +244,39 @@ spec = do
         `shouldBe` Right (TTuple [TBool, TInt])
     it "keeps pattern variables tied to a parameter's type" $
       infer "let f x = let (a, _) = (x, 1) in (a + 1, if a then 1 else 2)" `shouldSatisfy` isLeft'
+
+  describe "polymorphic types" $ do
+    it "types the builtin option constructors" $ do
+      typeOf "r" "let r = Some 1" `shouldBe` Right (TCon "option" [TInt])
+      typeOf "r" "let r = Some \"s\"" `shouldBe` Right (TCon "option" [TString])
+    it "lets None be used at any type" $
+      typeOf "r" "let a : int option = None\nlet b : string option = None\nlet r = (a, b)"
+        `shouldBe` Right (TTuple [TCon "option" [TInt], TCon "option" [TString]])
+    it "unifies None with the other branch" $
+      typeOf "r" "let r = if true then None else Some 1" `shouldBe` Right (TCon "option" [TInt])
+    it "matches on option" $
+      typeOf "r" "let r = match Some 1 with | Some x -> x + 1 | None -> 0" `shouldBe` Right TInt
+    it "rejects an option of the wrong type" $
+      infer "let r : string option = Some 1" `shouldSatisfy` isLeft'
+    it "defines a polymorphic variant type" $ do
+      let src = "type nonrec 'a box = Box of 'a\n"
+      typeOf "r" (src ++ "let r = Box 1") `shouldBe` Right (TCon "box" [TInt])
+      typeOf "r" (src ++ "let r = (Box 1, Box true)")
+        `shouldBe` Right (TTuple [TCon "box" [TInt], TCon "box" [TBool]])
+      typeOf "r" (src ++ "let r = match Box 1 with | Box x -> x") `shouldBe` Right TInt
+    it "defines a type with several parameters" $
+      typeOf "r" "type nonrec ('a, 'b) either = Left of 'a | Right of 'b\nlet r : (int, string) either = Left 1"
+        `shouldBe` Right (TCon "either" [TInt, TString])
+    it "defines a polymorphic alias" $
+      typeOf "r" "type nonrec 'a pair = 'a * 'a\nlet r : int pair = (1, 2)"
+        `shouldBe` Right (TTuple [TInt, TInt])
+    it "rejects the wrong number of type arguments" $ do
+      infer "let r : option = None" `shouldSatisfy` isLeft'
+      infer "let r : (int, int) option = None" `shouldSatisfy` isLeft'
+      infer "let r : int int = 1" `shouldSatisfy` isLeft'
+    it "rejects an undeclared type parameter" $
+      infer "type nonrec 'a t = T of 'b" `shouldSatisfy` isLeft'
+    it "uses named type variables in annotations" $
+      typeOf "r" "let id (x : 'a) : 'a = x\nlet r = (id 1, id true)" `shouldBe` Right (TTuple [TInt, TBool])
+    it "shares a named type variable within one definition" $
+      infer "let f (x : 'a) (y : 'a) = (x + 1, y)\nlet r = f 1 \"s\"" `shouldSatisfy` isLeft'

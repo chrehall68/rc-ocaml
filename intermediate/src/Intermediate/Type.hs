@@ -1,4 +1,4 @@
-module Intermediate.Type (TypeVar (..), ArgLabel (..), Type (..), TypeVarState (..), TypeVarM, TypeScheme (..), initialTypeVarState, newTypeVar, bindTypeVar, prune, unify, resolveType, freeTypeVars, generalize, instantiate) where
+module Intermediate.Type (TypeVar (..), ArgLabel (..), Type (..), TypeVarState (..), TypeVarM, TypeScheme (..), initialTypeVarState, newTypeVar, bindTypeVar, prune, unify, resolveType, freeTypeVars, generalize, instantiate, substituteTypes) where
 
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, throwError)
@@ -212,8 +212,9 @@ generalize tp environmentVars = do
   let trulyFree = Data.Set.difference freeVars environmentVars
   return $ Forall trulyFree tp
 
-replaceTypes :: Data.Map.Map TypeVar TypeVar -> Type -> TypeVarM Type
-replaceTypes replacements tp = do
+-- replaces the given (unbound) type variables with types
+substituteTypes :: Data.Map.Map TypeVar Type -> Type -> TypeVarM Type
+substituteTypes replacements tp = do
   pruned <- prune tp
   case pruned of
     TUnit -> return TUnit
@@ -222,14 +223,14 @@ replaceTypes replacements tp = do
     TFloat -> return TFloat
     TChar -> return TChar
     TString -> return TString
-    TArrow arg lhs rhs -> TArrow arg <$> replaceTypes replacements lhs <*> replaceTypes replacements rhs
+    TArrow arg lhs rhs -> TArrow arg <$> substituteTypes replacements lhs <*> substituteTypes replacements rhs
     TTuple types -> do
-      TTuple <$> mapM (replaceTypes replacements) types
+      TTuple <$> mapM (substituteTypes replacements) types
     TCon name types -> do
-      TCon name <$> mapM (replaceTypes replacements) types
+      TCon name <$> mapM (substituteTypes replacements) types
     TVar var ->
       case Data.Map.lookup var replacements of
-        Just replacement -> return $ TVar replacement
+        Just replacement -> return replacement
         Nothing -> return $ TVar var
 
 -- use this ie when encountering an application of a polymorphic function
@@ -238,5 +239,5 @@ instantiate (Forall unconstrained tp) = do
   let unconstrainedList = Data.Set.toList unconstrained
   freshVars <- mapM (\_ -> newTypeVar) unconstrainedList
   let replacements = zip unconstrainedList freshVars
-  let replacementMap = Data.Map.fromList replacements
-  replaceTypes replacementMap tp
+  let replacementMap = Data.Map.fromList (map (fmap TVar) replacements)
+  substituteTypes replacementMap tp
