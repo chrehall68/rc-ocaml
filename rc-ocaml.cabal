@@ -116,6 +116,8 @@ executable rc-ocaml
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.20.2.0,
+    process,
+    filepath,
     rc-ocaml:frontend,
     rc-ocaml:intermediate,
     rc-ocaml:backend
