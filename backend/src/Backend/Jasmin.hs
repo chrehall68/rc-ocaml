@@ -7,7 +7,7 @@ import Data.List (isSuffixOf)
 import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
-import Intermediate.Type (ArgLabel (..), Type (..))
+import Intermediate.Type (Type (..))
 import Intermediate.TypedAst
 import Numeric (showHex)
 import Text.Read (readMaybe)
@@ -123,7 +123,7 @@ kind ty = case ty of
   TInt -> pure LongValue
   TBool -> pure IntValue
   TChar -> pure IntValue
-  TDouble -> pure DoubleValue
+  TFloat -> pure DoubleValue
   TString -> pure RefValue
   TCon "array" [_] -> pure RefValue
   TCon "list" [_] -> pure RefValue
@@ -149,6 +149,13 @@ reject feature = lift (Left ("Jasmin backend does not support " ++ feature))
 requireType :: Type -> Type -> Emit ()
 requireType expected actual = unless (expected == actual) $
   lift (Left ("Expected " ++ show expected ++ " but received " ++ show actual ++ " in lowered AST"))
+
+-- Polymorphic list/array bindings can be instantiated at different element
+-- types. Their element type is erased by the current JVM representation.
+requireLocalType :: Type -> Type -> Emit ()
+requireLocalType (TCon "list" [_]) (TCon "list" [_]) = pure ()
+requireLocalType (TCon "array" [_]) (TCon "array" [_]) = pure ()
+requireLocalType expected actual = requireType expected actual
 
 freshLocal :: Type -> Emit Local
 freshLocal ty = do
@@ -224,7 +231,7 @@ emitExpr env expression = case expression of
   TEConstant ty constant -> emitConstant ty constant
   TEVar ty (Path Nothing name) -> case Map.lookup name env of
     Just local@(Local boundType _ _) -> do
-      requireType ty boundType
+      requireLocalType ty boundType
       pure (access "load" 1 local)
     Nothing -> reject ("unbound or first-class value " ++ show name)
   TEVar _ _ -> reject "module-qualified values"
@@ -276,7 +283,6 @@ emitExpr env expression = case expression of
   TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
   TECons {} -> reject "nonempty lists"
-  TEArray ty [] -> emitConstant ty ConstantArray
   TEArray {} -> reject "nonempty arrays"
   TERecord {} -> reject "records"
   TEFieldAccess {} -> reject "record field access"
@@ -287,13 +293,13 @@ emitExpr env expression = case expression of
 
 emitApply :: Env -> TExpr Type -> Emit Code
 emitApply env application = case application of
-  TEApply result (TEApply _ (TEVar _ (Path Nothing name)) NoLabel left) NoLabel right
+  TEApply result (TEApply _ (TEVar _ (Path Nothing name)) left) right
     | Map.notMember name env, Just (ty, opcode) <- Map.lookup name arithmetic -> do
         requireType ty result
         leftCode <- emitExpected env ty left
         rightCode <- emitExpected env ty right
         pure (leftCode <> rightCode <> instruction (-2) opcode <> normalizeInt ty)
-  TEApply result (TEVar _ (Path Nothing name)) NoLabel argument
+  TEApply result (TEVar _ (Path Nothing name)) argument
     | Map.notMember name env -> case name of
         "print_endline" -> do
           requireType TUnit result
@@ -302,13 +308,13 @@ emitApply env application = case application of
             <> code <> instruction (-2) "invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V"
         "string_of_int" -> conversion result argument TInt TString (-1) "invokestatic java/lang/Long/toString(J)Ljava/lang/String;"
         "string_of_bool" -> conversion result argument TBool TString 0 "invokestatic java/lang/Boolean/toString(Z)Ljava/lang/String;"
-        "float_of_int" -> conversion result argument TInt TDouble 0 "l2d"
+        "float_of_int" -> conversion result argument TInt TFloat 0 "l2d"
         _ -> reject ("application of " ++ show name)
   _ -> reject "general function application"
   where
     arithmetic = Map.fromList
       [ ("+", (TInt, "ladd")), ("-", (TInt, "lsub")), ("*", (TInt, "lmul")), ("/", (TInt, "ldiv")),
-        ("+.", (TDouble, "dadd")), ("-.", (TDouble, "dsub")), ("*.", (TDouble, "dmul")), ("/.", (TDouble, "ddiv"))
+        ("+.", (TFloat, "dadd")), ("-.", (TFloat, "dsub")), ("*.", (TFloat, "dmul")), ("/.", (TFloat, "ddiv"))
       ]
     normalizeInt TInt = instruction 1 "iconst_1" <> instruction (-1) "lshl"
       <> instruction 1 "iconst_1" <> instruction (-1) "lshr"
@@ -331,7 +337,7 @@ emitConstant ty constant = case constant of
     | isInfinite number -> do
         code <- floatingDivision "dconst_1" "dconst_0"
         pure (code <> if number < 0 then instruction 0 "dneg" else mempty)
-    | otherwise -> literal TDouble 2 (show number)
+    | otherwise -> literal TFloat 2 (show number)
   ConstantChar character
     | ord character <= 255 -> literal TChar 1 (show (ord character))
     | otherwise -> reject "character literals outside the OCaml byte range"
@@ -357,7 +363,7 @@ emitConstant ty constant = case constant of
       let opcode = if slots == 2 then "ldc2_w " else "ldc "
       pure (instruction slots (opcode ++ operand))
     floatingDivision numerator denominator = do
-      requireType TDouble ty
+      requireType TFloat ty
       pure (instruction 2 numerator <> instruction 2 denominator <> instruction (-2) "ddiv")
 
 -- Jasmin reads Unicode escapes as UTF-16 code units. The size check uses

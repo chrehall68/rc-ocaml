@@ -23,8 +23,8 @@ main = hspec $ describe "generateJasmin" $ do
 
   it "counts two-slot operands and shares the stack height at a conditional join" $ do
     let condition = TEConstant TBool (ConstantBool False)
-        choose = TEIf TDouble condition (double 1.5) (double 2.5)
-        expression = binary "+." TDouble (double 3) choose
+        choose = TEIf TFloat condition (double 1.5) (double 2.5)
+        expression = binary "+." TFloat (double 3) choose
     withCode (generateExpressions [expression]) $ \code -> do
       code `shouldContain` "  .limit stack 4\n"
       code `shouldContain` "  ifeq L0\n  ldc2_w 1.5\n  goto L1\nL0:\n  ldc2_w 2.5\nL1:\n  dadd\n  pop2\n"
@@ -62,6 +62,18 @@ main = hspec $ describe "generateJasmin" $ do
         expression = TEIf TUnit (TEConstant TBool (ConstantBool False)) largeBranch (TEConstant TUnit ConstantUnit)
     generateExpressions [expression] `shouldSatisfy` either (isInfixOf "16-bit offset limit") (const False)
 
+  it "allows a polymorphic empty list binding to be instantiated at another type" $ do
+    let generated = alexScanTokens "let empty = [];; let copy = empty"
+          >>= parse >>= lowerAndInfer >>= generateJasmin "Program"
+    withCode generated $ \code ->
+      code `shouldContain` "  aconst_null\n  astore 1\n  aload 1\n"
+
+  it "allows a polymorphic empty array binding to be instantiated at another type" $ do
+    let generated = alexScanTokens "let empty = [||];; let copy = empty"
+          >>= parse >>= lowerAndInfer >>= generateJasmin "Program"
+    withCode generated $ \code ->
+      code `shouldContain` "  anewarray java/lang/Object\n  astore 1\n  aload 1\n"
+
 generateExpressions :: [TExpr Type] -> Either String String
 generateExpressions = generateJasmin "Program" . TProgram . map TDefinitionExpr
 
@@ -72,10 +84,10 @@ integer :: Int -> TExpr Type
 integer n = TEConstant TInt (ConstantInt (IntLiteral n Unspecified))
 
 double :: Double -> TExpr Type
-double = TEConstant TDouble . ConstantDouble
+double = TEConstant TFloat . ConstantDouble
 
 binary :: String -> Type -> TExpr Type -> TExpr Type -> TExpr Type
 binary name ty left right =
   let inner = TArrow NoLabel ty ty
       operator = TEVar (TArrow NoLabel ty inner) (Path Nothing name)
-   in TEApply ty (TEApply inner operator NoLabel left) NoLabel right
+   in TEApply ty (TEApply inner operator left) right
