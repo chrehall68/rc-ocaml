@@ -355,7 +355,6 @@ lowerExpr expr =
         unifyOrRollback (exprAnnotation typedBody) TUnit
         return typedBody
       return $ TEFor TUnit loopVar typedStart typedEnd isTo typedBody
-    -- TODO: things between
     Ast.ExprSequence left right -> do
       -- both should be valid, but only result of right is returned
       -- and left should be unit (technically ocaml gives warnings if not)
@@ -391,14 +390,16 @@ lowerExpr expr =
           )
           cases
       return $ TEMatch returnedTp typedExpr typedCases
-    Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
-      -- then need to insert these bindings into the symbol table
-      -- (in their own scope, which is dropped after the body)
-      (loweredBindings, loweredInExpr) <- withScope $ do
-        loweredBindings <- lowerAndInsertBindings isRec letBindings
-        loweredInExpr <- lowerExpr inExpr
-        return (loweredBindings, loweredInExpr)
-      return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
+    Ast.ExprFunction fnCases -> do
+      -- just need to match given parameter against given cases
+      let name = "$functionParam"
+          lowered =
+            Ast.ExprLambda
+              { Ast.parameters = [Ast.ParameterPattern (Ast.PatternVariable name)],
+                Ast.typeConstraint = Nothing,
+                Ast.body = Ast.ExprMatch (Ast.ExprPath (Ast.Path Nothing name)) fnCases
+              }
+      lowerExpr lowered
     Ast.ExprLambda {Ast.parameters = params, Ast.typeConstraint = retConstraint, Ast.body = body} ->
       lowerParameters params $ do
         typedBody <- lowerExpr body
@@ -409,6 +410,15 @@ lowerExpr expr =
             unifyOrRollback (exprAnnotation typedBody) desired
           Nothing -> return ()
         return typedBody
+    -- TODO: Try
+    Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
+      -- then need to insert these bindings into the symbol table
+      -- (in their own scope, which is dropped after the body)
+      (loweredBindings, loweredInExpr) <- withScope $ do
+        loweredBindings <- lowerAndInsertBindings isRec letBindings
+        loweredInExpr <- lowerExpr inExpr
+        return (loweredBindings, loweredInExpr)
+      return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
     _ -> throwError "Not implemented"
 
 -- whether evaluating the expression can't have effects (so it's safe to generalize its type)

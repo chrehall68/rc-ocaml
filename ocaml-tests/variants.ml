@@ -10,7 +10,7 @@ let v = match x with
   | Some z -> z
   | None -> 34
 
-let default x = match x with
+let default = function
  | Some v -> v 
  | None -> false
 
