@@ -1,4 +1,8 @@
 {
+-- job of parser = create an AST that represents the source
+-- and desugar any names so that the intermediate tier doesn't need to know
+-- about any name desugaring (ie with prefixes)
+
 module Frontend.Parser where
 -- Import any AST or token types needed here
 import Frontend.Ast
@@ -34,7 +38,7 @@ import qualified Data.List.NonEmpty  as NonEmpty
 %left PREC_INFIX0 INFIXOP0 '=' '<' '>' '!='
 %right PREC_INFIX1 INFIXOP1
 %right '::'
-%left PREC_INFIX2 INFIXOP2 '+' '-' '-.'
+%left PREC_INFIX2 INFIXOP2 '+' '+.' '-' '-.'
 %left PREC_INFIX3 INFIXOP3 '*' MOD LAND LOR LXOR
 %right PREC_INFIX4 INFIXOP4 LSL LSR ASR
 %nonassoc NEGATE_OP -- for prefix negation
@@ -42,6 +46,7 @@ import qualified Data.List.NonEmpty  as NonEmpty
 %left HASHOP
 %nonassoc BELOW_DOT -- for module paths followed by a `.`
 %left '.'
+%nonassoc PREC_PREFIX -- prefix operators bind tighter than `.`, so `!r.x` is `(!r).x`
 
 %token
       -- literals and identifiers
@@ -129,6 +134,7 @@ import qualified Data.List.NonEmpty  as NonEmpty
       ')'         { TokenRParen }
       '*'         { TokenStar }
       '+'         { TokenPlus }
+      '+.'        { TokenPlusDot }
       ','         { TokenComma }
       '-'         { TokenMinus }
       '-.'        { TokenMinusDot }
@@ -232,6 +238,7 @@ InfixOp1
 InfixOp2
   : INFIXOP2                    { $1 }
   | '+'                         { "+" }
+  | '+.'                        { "+." }
   | '-'                         { "-" }
   | '-.'                        { "-." }
 
@@ -473,8 +480,12 @@ Expr
   | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
   -- function application
   | AtomExpr many1(Argument)  { ExprFunctionApplication $1 $2 }
-  | '-' Expr %prec NEGATE_OP    { ExprPrefix "-" $2 }
-  | '-.' Expr %prec NEGATE_OP  { ExprPrefix "-." $2 }
+  -- unary minus and plus are named ~- and ~+ (and ~-. and ~+.) like in ocaml,
+  -- so they can't be confused with the infix operators
+  | '+' Expr %prec NEGATE_OP    { ExprPrefix "~+" $2 }
+  | '+.' Expr %prec NEGATE_OP   { ExprPrefix "~+." $2 }
+  | '-' Expr %prec NEGATE_OP    { ExprPrefix "~-" $2 }
+  | '-.' Expr %prec NEGATE_OP  { ExprPrefix "~-." $2 }
   -- infix operators; need to list them all out to get precendence right
   | Expr ':=' Expr                       { ExprInfix ":=" $1 $3 }
   | Expr InfixOpOr Expr  %prec PREC_OR   { ExprInfix $2 $1 $3 }
@@ -485,12 +496,9 @@ Expr
   | Expr InfixOp3 Expr   %prec PREC_INFIX3  { ExprInfix $2 $1 $3 }
   | Expr InfixOp4 Expr   %prec PREC_INFIX4  { ExprInfix $2 $1 $3 }
   | Expr HASHOP Expr                     { ExprInfix $2 $1 $3 }
-  -- accessors for records, arrays, and strings
-  | AtomExpr '.' Field              { ExprFieldAccess $1 $3 }
+  -- assignments to records and arrays (the reads are in AtomExpr, so they can be arguments)
   | AtomExpr '.' Field '<-' Expr    { ExprFieldAssignment $1 $3 $5 }
-  | AtomExpr '.' '(' SeqExpr ')'              { ExprArrayAccess $1 $4 }
   | AtomExpr '.' '(' SeqExpr ')' '<-' Expr    { ExprArrayAssignment $1 $4 $7 }
-  | AtomExpr '.' '[' SeqExpr ']'              { ExprStringAccess $1 $4 }
   -- no need for the string assignment since that's now deprecated and a syntax error
   | IF SeqExpr THEN Expr              { ExprIf $2 $4 Nothing }
   | IF SeqExpr THEN Expr ELSE Expr    { ExprIf $2 $4 (Just $6) }
@@ -528,11 +536,16 @@ SimpleExpr
 AtomExpr
   : LiteralConstant            { ExprConstant $1 }
   -- putting prefix here ensures that we get `(!f) x` from `!f x`
-  | PREFIX SimpleExpr          { ExprPrefix $1 $2 }
+  | PREFIX AtomExpr %prec PREC_PREFIX  { ExprPrefix $1 $2 }
   | ValuePath                  { ExprPath $1 }
   | '(' SeqExpr ')'            { $2 }
   | BEGIN SeqExpr END          { $2 }
   | '(' SeqExpr ':' TypeExpr ')'  { ExprAnnotated $2 $4 }
+  -- accessors for records, arrays, and strings; these bind tighter than function
+  -- application, so `f r.x a.(0)` is `f (r.x) (a.(0))`
+  | AtomExpr '.' Field                { ExprFieldAccess $1 $3 }
+  | AtomExpr '.' '(' SeqExpr ')'      { ExprArrayAccess $1 $4 }
+  | AtomExpr '.' '[' SeqExpr ']'      { ExprStringAccess $1 $4 }
   | '[' ExprList ']'   { ExprCons (NonEmpty.appendList $2 [(ExprConstant ConstantList)]) }
   | '[|' ExprList '|]' { ExprArray $2 }
   | '{' ExprFieldList '}'  { ExprRecord Nothing $2 }

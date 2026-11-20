@@ -104,6 +104,7 @@ spec = do
         ("&&", TokenAmpersandAmpersand),
         ("*", TokenStar),
         ("+", TokenPlus),
+        ("+.", TokenPlusDot),
         ("-", TokenMinus),
         ("-.", TokenMinusDot),
         ("->", TokenArrow),
@@ -145,7 +146,7 @@ spec = do
 
   describe "infix symbols" $ do
     forM_
-      ["<=", ">=", "+=", "|>", "<|", "**", "@@", "^^", "==", "<>", "+.", "*.", "->>", "<--", "&&&", "|||", "#+", "$", "%", "/", "@", "^", "-->"]
+      ["<=", ">=", "+=", "|>", "<|", "**", "@@", "^^", "==", "<>", "*.", "->>", "<--", "&&&", "|||", "#+", "$", "%", "/", "@", "^", "-->"]
       $ \text ->
         it ("lexes " ++ text ++ " as a single infix symbol") $
           alexScanTokens text `shouldBe` Right [infixToken text]
@@ -155,13 +156,13 @@ spec = do
       alexScanTokens "- -> ->>" `shouldBe` Right [TokenMinus, TokenArrow, TokenInfix2 "->>"]
       alexScanTokens "= ==" `shouldBe` Right [TokenEq, TokenInfix0 "=="]
     it "classifies infix symbols by precedence level" $ do
-      alexScanTokens "<= |> @@ ^^ +. ->> *. / % ** **. #+"
+      alexScanTokens "<= |> @@ ^^ +.. ->> *. / % ** **. #+"
         `shouldBe` Right
           [ TokenInfix0 "<=",
             TokenInfix0 "|>",
             TokenInfix1 "@@",
             TokenInfix1 "^^",
-            TokenInfix2 "+.",
+            TokenInfix2 "+..",
             TokenInfix2 "->>",
             TokenInfix3 "*.",
             TokenInfix3 "/",

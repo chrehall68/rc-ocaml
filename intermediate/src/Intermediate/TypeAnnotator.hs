@@ -1,10 +1,11 @@
 module Intermediate.TypeAnnotator (lowerAndInfer) where
 
-import Control.Monad (when)
+import Control.Monad (forM, forM_, when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
-import Data.List ((\\))
+import Data.Foldable (foldrM)
+import Data.List (nub, partition, (\\))
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
 import Data.Maybe (fromMaybe)
@@ -53,25 +54,37 @@ lowerDefinitionOrExpr defOrExpr = do
     Ast.Definition d -> lowerDefinition d
     Ast.Expr e -> TDefinitionExpr <$> lowerExpr e
 
-typeConstant :: Ast.Constant -> LowerAndInferM Type
+-- [] is just the constant constructor of the list type
+lowerConstant :: Ast.Constant -> TConstant
+lowerConstant constant =
+  case constant of
+    Ast.ConstantInt i -> TConstInt i
+    Ast.ConstantDouble d -> TConstDouble d
+    Ast.ConstantChar c -> TConstChar c
+    Ast.ConstantString str -> TConstString str
+    Ast.ConstantBool b -> TConstBool b
+    Ast.ConstantUnit -> TConstUnit
+    Ast.ConstantList -> TConstVariant (Ast.Path Nothing "[]")
+    Ast.ConstantArray -> TConstEmptyArray
+    Ast.ConstantPolymorphicVariant tag -> TConstPolymorphicVariant tag
+    Ast.ConstantVariant path -> TConstVariant path
+
+typeConstant :: TConstant -> LowerAndInferM Type
 typeConstant constant =
   case constant of
-    Ast.ConstantInt _ -> return TInt
-    Ast.ConstantDouble _ -> return TFloat
-    Ast.ConstantChar _ -> return TChar
-    Ast.ConstantString _ -> return TString
-    Ast.ConstantBool _ -> return TBool
-    Ast.ConstantUnit -> return TUnit
+    TConstInt _ -> return TInt
+    TConstDouble _ -> return TFloat
+    TConstChar _ -> return TChar
+    TConstString _ -> return TString
+    TConstBool _ -> return TBool
+    TConstUnit -> return TUnit
     -- don't know what will be inside, so we store it as an 'a list / 'a array
-    Ast.ConstantList -> do
-      tvar <- liftTypes newTypeVar
-      return $ TCon "list" [TVar tvar]
-    Ast.ConstantArray -> do
+    TConstEmptyArray -> do
       tvar <- liftTypes newTypeVar
       return $ TCon "array" [TVar tvar]
     -- TODO: implement these
-    Ast.ConstantPolymorphicVariant _ -> throwError "polymorphic variants not implemented yet"
-    Ast.ConstantVariant path -> do
+    TConstPolymorphicVariant _ -> throwError "polymorphic variants not implemented yet"
+    TConstVariant path -> do
       -- need to know where this variant name comes from
       symtab <- gets symbolTable
       info <- liftEither $ SymTab.resolveConstructor symtab path
@@ -176,7 +189,7 @@ applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
               (Nothing, Nothing)
                 | not (null unlabeled) -> do
                     -- a positional argument follows, so the optional is defaulted
-                    let none = TEConstant lhs (Ast.ConstantVariant (Ast.Path Nothing "None"))
+                    let none = TEConstant lhs (TConstVariant (Ast.Path Nothing "None"))
                     applyTyped rhs none args
                 | otherwise -> etaExpand label lhs rhs
     -- we don't know anything about the function (e.g. a lambda parameter),
@@ -193,10 +206,73 @@ applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
       -- have remaining parameters but don't have a function type
       | otherwise -> throwError $ "Could not apply all arguments to lhs. Remaining arguments: " ++ show unlabeled ++ " and labeled " ++ show labeled ++ " and optional " ++ show optional ++ " to lhs"
 
+consPath :: Ast.Path
+consPath = Ast.Path Nothing "::"
+
+-- a constructor applied to its (already lowered) argument
+-- a constructor with several arguments takes them as one tuple
+applyConstructor :: Ast.Path -> TExpr Type -> LowerAndInferM (TExpr Type)
+applyConstructor constr typedArg = do
+  symtab <- gets symbolTable
+  constrInfo <- liftEither $ SymTab.resolveConstructor symtab constr
+  (constrArgs, constrResult) <- instantiateConstructor constrInfo
+  case constrArgs of
+    [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
+    arg : [] -> unifyOrRollback arg (exprAnnotation typedArg)
+    args -> unifyOrRollback (TTuple args) (exprAnnotation typedArg)
+  return $ TEVariant constrResult constr typedArg
+
+-- same, but for a constructor in a pattern
+applyConstructorPattern :: Ast.Path -> TPattern Type -> LowerAndInferM (TPattern Type)
+applyConstructorPattern constr typedInner = do
+  symtab <- gets symbolTable
+  constrInfo <- liftEither $ SymTab.resolveConstructor symtab constr
+  (constrArgs, constrResult) <- instantiateConstructor constrInfo
+  case constrArgs of
+    [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
+    arg : [] -> unifyOrRollback arg (patternAnnotation typedInner)
+    args -> unifyOrRollback (TTuple args) (patternAnnotation typedInner)
+  return $ TPVariant constrResult constr typedInner
+
+-- similar to constructors, but for polymorphic records
+-- returns what we know about the field, the record's type, and the field's type
+instantiateField :: Ast.Path -> LowerAndInferM (SymTab.FieldInfo, Type, Type)
+instantiateField path = do
+  symtab <- gets symbolTable
+  info <- liftEither $ SymTab.resolveField symtab path
+  -- the record type and field type must be instantiated together, so that for
+  -- `type 'a box = {contents : 'a}` the 'a in both is the same fresh variable
+  let params = Data.Set.fromList (SymTab.fieldParams info)
+      packed = TTuple [SymTab.fieldRecord info, SymTab.fieldType info]
+  unpacked <- liftTypes $ instantiate (Forall params packed)
+  case unpacked of
+    TTuple [recordType, fieldType] -> return (info, recordType, fieldType)
+    _ -> error "impossible"
+
+-- resolves the fields of a record literal / record pattern, which must all belong
+-- to the same record type. returns that type, every field name the record has,
+-- and the type of each given field (in order)
+instantiateFields :: [Ast.Path] -> LowerAndInferM (Type, [String], [Type])
+instantiateFields [] = error "impossible"
+instantiateFields paths@(firstPath : _) = do
+  when (hasDuplicates paths) $ throwError "a field was given more than once"
+  instantiated <- mapM instantiateField paths
+  case instantiated of
+    [] -> error "impossible"
+    (firstInfo, recordType, _) : _ -> do
+      -- every other field must live in that same record type. each field was
+      -- instantiated separately, so we unify their record types to share the variables
+      -- (this is also what rejects `{a = 1; b = 2}` when a and b are from different records)
+      forM_ (zip paths instantiated) $ \(path, (_, otherRecord, _)) ->
+        unifyOrRollback recordType otherRecord
+          `catchError` \_ -> throwError $ "field " ++ show path ++ " does not belong to the same record type as " ++ show firstPath
+      return (recordType, SymTab.recordFields firstInfo, [fieldTp | (_, _, fieldTp) <- instantiated])
+
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
-    Ast.ExprConstant constant -> do
+    Ast.ExprConstant rawConstant -> do
+      let constant = lowerConstant rawConstant
       t <- typeConstant constant
       return $ TEConstant t constant
     Ast.ExprPath p -> do
@@ -207,17 +283,8 @@ lowerExpr expr =
       tp <- liftTypes $ instantiate scheme
       return $ TEVar tp p
     Ast.ExprNonconstantVariant {Ast.constr = constr, Ast.expr = expr} -> do
-      symtab <- gets symbolTable
-      constrInfo <- liftEither $ SymTab.resolveConstructor symtab constr
       typedExpr <- lowerExpr expr
-      (constrArgs, constrResult) <- instantiateConstructor constrInfo
-      case constrArgs of
-        [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
-        arg : [] -> do
-          unifyOrRollback arg (exprAnnotation typedExpr)
-        args -> do
-          unifyOrRollback (TTuple args) (exprAnnotation typedExpr)
-      return $ TEVariant constrResult constr typedExpr
+      applyConstructor constr typedExpr
     Ast.ExprNonconstantPolymorphicVariant _ _ -> do throwError "Polymorphic variants not supported yet"
     Ast.ExprAnnotated expr typeExpr -> do
       typedExpr <- lowerExpr expr
@@ -231,17 +298,10 @@ lowerExpr expr =
       let tupleType = map exprAnnotation (first' : second' : rest')
       return $ TETuple (TTuple tupleType) first' second' rest'
     Ast.ExprCons elements -> do
+      -- the last element is the tail, and everything before it is consed onto it
       typedElements <- mapM lowerExpr elements
-      -- now we need the last element to be a list
-      let lastElem = NonEmpty.last typedElements
-      innerVar <- liftTypes newTypeVar
-      let desiredType = TCon "list" [TVar innerVar]
-      unifyOrRollback desiredType (exprAnnotation lastElem)
-      -- and then we need all the elements to be unifiable to each other
-      -- but don't include last one since that is type list 'a
-      mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) (NonEmpty.init typedElements)
-      -- now construct cons from this
-      return $ foldr (\newHead accum -> TECons desiredType newHead accum) lastElem (NonEmpty.init typedElements)
+      let cons h t = applyConstructor consPath (TETuple (TTuple [exprAnnotation h, exprAnnotation t]) h t [])
+      foldrM cons (NonEmpty.last typedElements) (NonEmpty.init typedElements)
     Ast.ExprArray elements -> do
       typedElements <- mapM lowerExpr elements
       -- then all need to unify together
@@ -249,7 +309,45 @@ lowerExpr expr =
       mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) typedElements
       -- everything worked
       return $ TEArray (TCon "array" [TVar innerVar]) typedElements
-    -- TODO: implement the many other expr types between ExprPath and ExprInfix
+    Ast.ExprRecord source fields -> do
+      let paths = [path | Ast.RecordField path _ _ <- fields]
+      (recordType, allFields, fieldTypes) <- instantiateFields paths
+      -- `{e with ...}` has the same type as e
+      typedSource <- forM source $ \s -> do
+        typedS <- lowerExpr s
+        unifyOrRollback recordType (exprAnnotation typedS)
+        return typedS
+      -- a record literal has to give every field; `with` fills in the rest from the source
+      let missing = [name | name <- allFields, Ast.Path Nothing name `notElem` paths]
+      when (null source && not (null missing)) $
+        throwError $
+          "this record is missing the field(s): " ++ unwords missing
+      typedFields <- forM (zip fields fieldTypes) $ \(Ast.RecordField path annotation valueExpr, fieldTp) -> do
+        typedValue <- lowerExpr valueExpr
+        -- `{x : t = e}` constrains the value
+        forM_ annotation $ \typeExpr -> do
+          desired <- lowerTypeExpr typeExpr
+          unifyOrRollback desired (exprAnnotation typedValue)
+        unifyOrRollback fieldTp (exprAnnotation typedValue)
+        return (path, typedValue)
+      return $ TERecord recordType typedSource typedFields
+    Ast.ExprFieldAccess recordExpr field -> do
+      typedRecord <- lowerExpr recordExpr
+      (_, recordType, fieldTp) <- instantiateField field
+      -- the field tells us what record type the expression has to be
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      return $ TEFieldAccess fieldTp typedRecord field
+    Ast.ExprFieldAssignment recordExpr field valueExpr -> do
+      typedRecord <- lowerExpr recordExpr
+      (info, recordType, fieldTp) <- instantiateField field
+      when (not (SymTab.fieldIsMutable info)) $
+        throwError $
+          "the field " ++ show field ++ " is not mutable"
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      typedValue <- lowerExpr valueExpr
+      unifyOrRollback fieldTp (exprAnnotation typedValue)
+      -- assigning evaluates to ()
+      return $ TEFieldAssignment TUnit typedRecord field typedValue
     Ast.ExprFunctionApplication func args -> do
       typedFunc <- lowerExpr func
       -- then the application needs to work
@@ -270,7 +368,16 @@ lowerExpr expr =
       when (Data.Map.size labeled /= length labeledList || Data.Map.size optional /= length optionalList) $
         throwError "the same label was given more than once in a function application"
       applyCurriedFunction typedFunc (unlabeled, labeled, optional)
-    -- TODO: Prefix
+    Ast.ExprPrefix op prefixExpr -> do
+      symtab <- gets symbolTable
+      opScheme <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
+      opType <- liftTypes $ instantiate opScheme
+      typedExpr <- lowerExpr prefixExpr
+      -- similar to infix, but simpler unification
+      outputType <- liftTypes newTypeVar
+      let desiredType = TArrow NoLabel (exprAnnotation typedExpr) (TVar outputType)
+      () <- unifyOrRollback desiredType opType
+      return $ TEApply (TVar outputType) (TEVar opType (Ast.Path Nothing op)) typedExpr
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable
       opScheme <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
@@ -320,7 +427,6 @@ lowerExpr expr =
         unifyOrRollback (exprAnnotation typedBody) TUnit
         return typedBody
       return $ TEFor TUnit loopVar typedStart typedEnd isTo typedBody
-    -- TODO: things between
     Ast.ExprSequence left right -> do
       -- both should be valid, but only result of right is returned
       -- and left should be unit (technically ocaml gives warnings if not)
@@ -356,14 +462,16 @@ lowerExpr expr =
           )
           cases
       return $ TEMatch returnedTp typedExpr typedCases
-    Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
-      -- then need to insert these bindings into the symbol table
-      -- (in their own scope, which is dropped after the body)
-      (loweredBindings, loweredInExpr) <- withScope $ do
-        loweredBindings <- lowerAndInsertBindings isRec letBindings
-        loweredInExpr <- lowerExpr inExpr
-        return (loweredBindings, loweredInExpr)
-      return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
+    Ast.ExprFunction fnCases -> do
+      -- just need to match given parameter against given cases
+      let name = "$functionParam"
+          lowered =
+            Ast.ExprLambda
+              { Ast.parameters = [Ast.ParameterPattern (Ast.PatternVariable name)],
+                Ast.typeConstraint = Nothing,
+                Ast.body = Ast.ExprMatch (Ast.ExprPath (Ast.Path Nothing name)) fnCases
+              }
+      lowerExpr lowered
     Ast.ExprLambda {Ast.parameters = params, Ast.typeConstraint = retConstraint, Ast.body = body} ->
       lowerParameters params $ do
         typedBody <- lowerExpr body
@@ -374,6 +482,15 @@ lowerExpr expr =
             unifyOrRollback (exprAnnotation typedBody) desired
           Nothing -> return ()
         return typedBody
+    -- TODO: Try
+    Ast.ExprLet {Ast.isRec = isRec, Ast.letBindings = letBindings, Ast.expr = inExpr} -> do
+      -- then need to insert these bindings into the symbol table
+      -- (in their own scope, which is dropped after the body)
+      (loweredBindings, loweredInExpr) <- withScope $ do
+        loweredBindings <- lowerAndInsertBindings isRec letBindings
+        loweredInExpr <- lowerExpr inExpr
+        return (loweredBindings, loweredInExpr)
+      return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
     _ -> throwError "Not implemented"
 
 -- whether evaluating the expression can't have effects (so it's safe to generalize its type)
@@ -386,7 +503,6 @@ isNonExpansive expr =
     TEVariant _ _ e -> isNonExpansive e
     TEPolymorphicVariant _ _ e -> isNonExpansive e
     TETuple _ a b rest -> all isNonExpansive (a : b : rest)
-    TECons _ a b -> isNonExpansive a && isNonExpansive b
     -- a function is a value no matter what its body does
     TEFunction {} -> True
     _ -> False
@@ -460,7 +576,8 @@ lowerAndInsertPattern pat =
       tVar <- liftTypes newTypeVar
       let tp = TVar tVar
       return $ TPWildcard tp
-    Ast.PatternConstant constant -> do
+    Ast.PatternConstant rawConstant -> do
+      let constant = lowerConstant rawConstant
       tp <- typeConstant constant
       return $ TPConstant tp constant
     Ast.PatternAlias innerPat name -> do
@@ -482,34 +599,30 @@ lowerAndInsertPattern pat =
       return typedPat
     -- TODO: handle PatternOr somehow; need to double check rules on names in different branches
     Ast.PatternVariant constrPath innerPat -> do
-      symtab <- gets symbolTable
-      constrInfo <- liftEither $ SymTab.resolveConstructor symtab constrPath
       typedInner <- lowerAndInsertPattern innerPat
-      (constrArgs, constrResult) <- instantiateConstructor constrInfo
-      case constrArgs of
-        [] -> throwError $ "constructor " ++ show constrPath ++ " expects no arguments, but was invoked on arguments"
-        arg : [] -> do
-          -- need inner pat to unify with expected type
-          unifyOrRollback arg (patternAnnotation typedInner)
-        args -> do
-          unifyOrRollback (TTuple args) (patternAnnotation typedInner)
-      return $ TPVariant constrResult constrPath typedInner
+      applyConstructorPattern constrPath typedInner
     -- TODO: handle PatternType?
     Ast.PatternTuple elements -> do
       typedElems <- mapM lowerAndInsertPattern elements
       let elemTypes = map patternAnnotation typedElems
       return $ TPTuple (TTuple elemTypes) typedElems
     Ast.PatternCons lhs rhs -> do
-      -- rhs must be a list
       typedLhs <- lowerAndInsertPattern lhs
       typedRhs <- lowerAndInsertPattern rhs
-      let desiredRhs = TCon "list" [(patternAnnotation typedLhs)]
-      unifyOrRollback desiredRhs (patternAnnotation typedRhs)
-      return $ TPCons desiredRhs typedLhs typedRhs
+      applyConstructorPattern consPath (TPTuple (TTuple [patternAnnotation typedLhs, patternAnnotation typedRhs]) [typedLhs, typedRhs])
     Ast.PatternList elems -> do
       -- transform to cons with an empty list
       let toReduce = foldr (\lhs rhs -> Ast.PatternCons lhs rhs) (Ast.PatternConstant Ast.ConstantList) elems
       lowerAndInsertPattern toReduce
+    Ast.PatternRecord fields _ -> do
+      -- the trailing `; _` makes no difference to the type: fields may always be left out
+      let paths = [path | Ast.PatternField path _ _ <- fields]
+      (recordType, _, fieldTypes) <- instantiateFields paths
+      typedFields <- forM (zip fields fieldTypes) $ \(Ast.PatternField path annotation fieldPat, fieldTp) -> do
+        typedPat <- lowerConstrainedPattern annotation fieldPat
+        unifyOrRollback fieldTp (patternAnnotation typedPat)
+        return (path, typedPat)
+      return $ TPRecord recordType typedFields
     -- TODO: handle the rest of the patterns
     _ -> throwError "bad"
 
@@ -562,102 +675,171 @@ lowerDefinition def =
       loweredBindings <- lowerAndInsertBindings isRec letBindings
       return $ TDefinitionLet isRec loweredBindings
     Ast.DefinitionType definition@(Ast.TypeDefinition isNonrec typedefs) -> do
-      when (not isNonrec) $ throwError "recursive types not implemented"
-      case typedefs of
-        [] -> error "impossible"
-        _t1 : _t2 : _ -> throwError "multiple typedefs not implemented yet"
-        (Ast.TypeDef paramNames name equation repr constraints) : [] -> do
-          when (length constraints > 0) $ throwError "constraints not supported yet"
-          when (length paramNames /= length (Data.Set.fromList paramNames)) $ throwError $ "type " ++ name ++ " has a repeated type parameter"
-          let pathName = Ast.Path Nothing name
-          -- each parameter is a type variable, which 'a in the body refers to
-          paramVars <- mapM (const $ liftTypes newTypeVar) paramNames
-          modify (\s -> s {namedTypeVars = Data.Map.fromList (zip paramNames paramVars)})
-          let tp = TCon name (map TVar paramVars)
-          body <-
-            case (equation, repr) of
-              (Nothing, Nothing) ->
-                -- empty type, nothing to do
-                return tp
-              (Just eq, Nothing) ->
-                -- acts as a type alias
-                lowerTypeExpr eq
-              (Nothing, Just rep) ->
-                case rep of
-                  Ast.TypeVariant constructors -> do
-                    mapM_
-                      ( \(Ast.ConstrDecl constrName typeExprs) -> do
-                          desiredTypes <- mapM lowerTypeExpr typeExprs
-                          let constrPathName = Ast.Path Nothing constrName
-                              info = SymTab.ConstructorInfo {SymTab.constructorParams = paramVars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
-                          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) constrPathName info})
-                          return ()
-                      )
-                      constructors
-                    return tp
-                  Ast.TypeRecord _fields -> throwError "todo"
-              (Just _eq, Just _rep) -> throwError "re-exporting types not supported yet"
-          -- the body can only mention the declared parameters
-          used <- gets namedTypeVars
-          let unbound = Data.Map.keys used \\ paramNames
-          when (not (null unbound)) $ throwError $ "unbound type parameter '" ++ head unbound ++ " in definition of " ++ name
-          modify (\s -> s {namedTypeVars = Data.Map.empty})
-          modify (\s -> s {symbolTable = SymTab.insertType (symbolTable s) pathName (SymTab.TypeInfo paramVars body)})
-          return $ TDefinitionType definition
+      lowerTypeDefinitions isNonrec typedefs
+      return $ TDefinitionType definition
+
+-- lowers a group of type definitions (`type a = ... and b = ...`)
+-- unless nonrec, the types can refer to themselves and to each other
+-- (a type alias in a recursive group can only refer to variant types, or to aliases defined before it)
+lowerTypeDefinitions :: Bool -> [Ast.TypeDef] -> LowerAndInferM ()
+lowerTypeDefinitions isNonrec typedefs = do
+  when (null typedefs) $ error "impossible"
+  -- each parameter is a type variable, which 'a in the body refers to
+  prepared <- forM typedefs $ \td -> do
+    when (not (null (Ast.typedefConstraints td))) $ throwError "constraints not supported yet"
+    let paramNames = Ast.typedefParams td
+    when (length paramNames /= length (Data.Set.fromList paramNames)) $
+      throwError $
+        "type " ++ Ast.typedefName td ++ " has a repeated type parameter"
+    paramVars <- mapM (const $ liftTypes newTypeVar) paramNames
+    return (td, paramVars)
+  let isAlias (td, _) = case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
+        (Just _, Nothing) -> True
+        _ -> False
+      (aliases, nominals) = partition isAlias prepared
+  -- every type that isn't an alias is its own distinct type,
+  -- so in a recursive group it can be referred to before its body is lowered
+  when (not isNonrec) $
+    forM_ nominals $
+      \(td, vars) -> registerType (Ast.typedefName td) (nominalInfo td vars)
+  -- aliases first, so the variants can use them
+  aliasInfos <- forM aliases $ \(td, vars) -> do
+    body <- withTypeParams td vars $ case Ast.typedefEquation td of
+      Just eq -> lowerTypeExpr eq
+      Nothing -> error "impossible"
+    let info = SymTab.TypeInfo vars body
+    when (not isNonrec) $ registerType (Ast.typedefName td) info
+    return (Ast.typedefName td, info)
+  nominalInfos <- forM nominals $ \(td, vars) -> do
+    withTypeParams td vars $ case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
+      (Nothing, Nothing) -> return ()
+      (Nothing, Just (Ast.TypeVariant constructors)) ->
+        forM_ constructors $ \(Ast.ConstrDecl constrName typeExprs) -> do
+          desiredTypes <- mapM lowerTypeExpr typeExprs
+          let info = SymTab.ConstructorInfo {SymTab.constructorParams = vars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = nominalType td vars}
+          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing constrName) info})
+      (Nothing, Just (Ast.TypeRecord fieldDecls)) -> do
+        let names = map Ast.fieldDeclName fieldDecls
+        when (hasDuplicates names) $
+          throwError $
+            "type " ++ Ast.typedefName td ++ " has a field defined more than once"
+        forM_ fieldDecls $ \(Ast.FieldDecl mutable fieldName typeExpr) -> do
+          desiredType <- lowerTypeExpr typeExpr
+          let info =
+                SymTab.FieldInfo
+                  { SymTab.fieldParams = vars,
+                    SymTab.fieldType = desiredType,
+                    SymTab.fieldRecord = nominalType td vars,
+                    SymTab.fieldIsMutable = mutable,
+                    SymTab.recordFields = names
+                  }
+          modify (\s -> s {symbolTable = SymTab.insertField (symbolTable s) (Ast.Path Nothing fieldName) info})
+      _ -> throwError "re-exporting types not supported yet"
+    return (Ast.typedefName td, nominalInfo td vars)
+  -- for nonrec, the new names only become visible now
+  forM_ (aliasInfos ++ nominalInfos) $ \(name, info) -> registerType name info
+  where
+    nominalType td vars = TCon (Ast.typedefName td) (map TVar vars)
+    nominalInfo td vars = SymTab.TypeInfo vars (nominalType td vars)
+
+hasDuplicates :: (Eq a) => [a] -> Bool
+hasDuplicates xs = length (nub xs) /= length xs
+
+-- runs an action where 'a in type expressions refers to the type's parameters
+-- the body can only mention the declared parameters
+withTypeParams :: Ast.TypeDef -> [TypeVar] -> LowerAndInferM a -> LowerAndInferM a
+withTypeParams td vars action = do
+  let paramNames = Ast.typedefParams td
+  modify (\s -> s {namedTypeVars = Data.Map.fromList (zip paramNames vars)})
+  result <- action
+  used <- gets namedTypeVars
+  case Data.Map.keys used \\ paramNames of
+    [] -> return ()
+    unbound : _ -> throwError $ "unbound type parameter '" ++ unbound ++ " in definition of " ++ Ast.typedefName td
+  modify (\s -> s {namedTypeVars = Data.Map.empty})
+  return result
+
+registerType :: String -> SymTab.TypeInfo -> LowerAndInferM ()
+registerType name info = modify (\s -> s {symbolTable = SymTab.insertType (symbolTable s) (Ast.Path Nothing name) info})
+
+-- binds a name in the current scope, which must not already have it
+bindMonomorphic :: String -> Type -> LowerAndInferM ()
+bindMonomorphic name tp = do
+  symtab <- gets symbolTable
+  let pathName = Ast.Path Nothing name
+  when (isRight $ SymTab.resolveValueInLast symtab pathName) $
+    throwError $
+      "variable " ++ name ++ " bound multiple times in this binding"
+  modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) pathName tp})
+
+-- what a let binding binds
+data BindingTarget = BindName String | BindPattern Ast.Pattern
 
 -- in the process of lowering the bindings, also inserts the bindings into the symbol table
+-- all the bindings of one `let ... and ...` are lowered together:
+--   - every right-hand side is lowered before any name is bound (unless the group is recursive,
+--     in which case every name is visible to every right-hand side, monomorphically)
+--   - then the names are generalized (if their right-hand sides are values)
 lowerAndInsertBindings :: Bool -> [Ast.LetBinding] -> LowerAndInferM [TLetBinding Type]
-lowerAndInsertBindings isRec letBindings = do
-  -- TODO: handle recursive bindings and multiple assignments
-  -- since multiple assignments allow forward refs
-  when isRec $ throwError "recursive not implemented yet"
-  case letBindings of
-    [] -> error "impossible"
-    _b1 : _b2 : _ -> throwError "Multiple bindings not implemented yet"
-    binding : [] ->
-      -- exactly 1 nonrecursive binding
-      case binding of
-        Ast.LetBindingPattern pat expr -> withScopeRestore False $ do
-          -- need to evaluate expression first
-          typedExpr <- lowerExpr expr
-          -- environment has to be measured before inserting the pattern
-          envVars <- gets symbolTable >>= liftTypes . envFreeVars
-          -- then can lower / insert the pattern
-          typedPat <- lowerAndInsertPattern pat
-          unifyOrRollback (patternAnnotation typedPat) (exprAnnotation typedExpr)
-          -- the current scope holds exactly the variables this pattern bound
-          -- apply same restriction here as in regular let bindings
-          when (isNonExpansive typedExpr) $ do
-            symtab <- gets symbolTable
-            generalized <- liftTypes $ SymTab.generalizeCurrentScope envVars symtab
-            modify (\s -> s {symbolTable = generalized})
-          return $ [TLetBinding typedPat typedExpr]
-        Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = typeExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
-          -- with parameters, this is sugar for `let f = fun params : t -> e`,
-          -- so the annotation constrains the result of the function and not f itself
-          let (valueExpr, bindingType) = case params of
-                [] -> (expr, typeExpr)
-                _ -> (Ast.ExprLambda params typeExpr expr, Nothing)
-          -- then evaluate the expression
-          typedExpr <- lowerExpr valueExpr
-          let exprType = exprAnnotation typedExpr
-          -- then just create and bind the type variable for our name
-          tVar <- liftTypes newTypeVar
-          unifyOrRollback (TVar tVar) exprType
-          let tp = TVar tVar
-          -- but also it should conform to our typeExpr
-          unifyWith <- case bindingType of
-            Just tpExpr -> lowerTypeExpr tpExpr
-            Nothing -> return tp
-          unifyOrRollback unifyWith tp
-          -- now everything checked out, so put it into our symbol table and return it
-          -- value restriction: only generalize if the right-hand side is a syntactic value
-          -- (otherwise its type variables stay shared, like ocaml's weak '_a)
-          symtab <- gets symbolTable
-          if isNonExpansive typedExpr
-            then do
-              envVars <- liftTypes $ envFreeVars symtab
-              scheme <- liftTypes $ generalize tp envVars
-              modify (\s -> s {symbolTable = SymTab.insertScheme (symbolTable s) (Ast.Path Nothing name) scheme})
-            else modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp})
-          return $ [TLetBinding (TPVariable tp name) (typedExpr)]
+lowerAndInsertBindings isRec letBindings = withScopeRestore False $ do
+  when (null letBindings) $ error "impossible"
+  let prepared = map prepareBinding letBindings
+  -- recursive names are visible while lowering all the right-hand sides
+  recVars <- forM prepared $ \(target, _, _) ->
+    case target of
+      BindName name | isRec -> do
+        var <- liftTypes newTypeVar
+        bindMonomorphic name (TVar var)
+        return $ Just var
+      BindPattern _ | isRec -> throwError "only variables are allowed as the left-hand side of let rec"
+      _ -> return Nothing
+  typedExprs <- mapM (\(_, valueExpr, _) -> lowerExpr valueExpr) prepared
+  -- now bind everything
+  results <- forM (zip3 prepared typedExprs recVars) $ \((target, _, annotation), typedExpr, recVar) -> do
+    let exprType = exprAnnotation typedExpr
+    namesBefore <- gets (SymTab.currentScopeNames . symbolTable)
+    (typedPat, names) <- case target of
+      BindName name -> do
+        tp <- case recVar of
+          Just var -> do
+            unifyOrRollback (TVar var) exprType
+            return $ TVar var
+          Nothing -> do
+            var <- liftTypes newTypeVar
+            unifyOrRollback (TVar var) exprType
+            bindMonomorphic name (TVar var)
+            return $ TVar var
+        -- it should also conform to our type annotation
+        forM_ annotation $ \tpExpr -> do
+          desired <- lowerTypeExpr tpExpr
+          unifyOrRollback desired tp
+        return (TPVariable tp name, [name])
+      BindPattern pat -> do
+        typedPat <- lowerAndInsertPattern pat
+        unifyOrRollback (patternAnnotation typedPat) exprType
+        -- the pattern bound everything new in the current scope
+        namesAfter <- gets (SymTab.currentScopeNames . symbolTable)
+        return (typedPat, namesAfter \\ namesBefore)
+    return (TLetBinding typedPat typedExpr, names, isNonExpansive typedExpr)
+  -- generalize against everything outside this group
+  symtab <- gets symbolTable
+  outerVars <- liftTypes $ envFreeVars (SymTab.popScope symtab)
+  -- value restriction: names whose right-hand side isn't a value stay monomorphic,
+  -- and so do any type variables they share with the others
+  let (generalizable, restricted) = partition (\(_, _, isValue) -> isValue) results
+  restrictedVars <- fmap Data.Set.unions $ forM (concatMap (\(_, names, _) -> names) restricted) $ \name -> do
+    scheme <- liftEither $ SymTab.resolveValueInLast symtab (Ast.Path Nothing name)
+    case scheme of
+      Forall _ tp -> liftTypes $ freeTypeVars tp
+  generalized <- liftTypes $ SymTab.generalizeNames (Data.Set.union outerVars restrictedVars) (concatMap (\(_, names, _) -> names) generalizable) symtab
+  modify (\s -> s {symbolTable = generalized})
+  return [binding | (binding, _, _) <- results]
+  where
+    -- with parameters, `let f p1 p2 : t = e` is sugar for `let f = fun p1 p2 : t -> e`,
+    -- so the annotation constrains the result of the function and not f itself
+    prepareBinding binding = case binding of
+      Ast.LetBindingPattern pat expr -> (BindPattern pat, expr, Nothing)
+      Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = typeExpr, Ast.coercedType = _c, Ast.expr1 = expr} ->
+        case params of
+          [] -> (BindName name, expr, typeExpr)
+          _ -> (BindName name, Ast.ExprLambda params typeExpr expr, Nothing)

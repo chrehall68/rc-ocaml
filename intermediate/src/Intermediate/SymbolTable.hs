@@ -9,7 +9,8 @@ module Intermediate.SymbolTable
     insertValue,
     insertScheme,
     envFreeVars,
-    generalizeCurrentScope,
+    generalizeNames,
+    currentScopeNames,
     resolveType,
     insertType,
     resolveConstructor,
@@ -21,6 +22,7 @@ module Intermediate.SymbolTable
   )
 where
 
+import Control.Monad (foldM)
 import qualified Data.Map
 import qualified Data.Set
 import Frontend.Ast (Path (..))
@@ -43,11 +45,14 @@ data ConstructorInfo = ConstructorInfo
 -- type 'a box = {mutable contents : 'a}
 -- contents has params ['a], type 'a, record 'a box, and is mutable
 -- params get replaced with fresh type vars at each use, same as constructors
+-- recordFields lists every field of the record (including this one), which
+-- lets us notice when a record literal forgets one
 data FieldInfo = FieldInfo
   { fieldParams :: [TypeVar],
     fieldType :: Type,
     fieldRecord :: Type,
-    fieldIsMutable :: Bool
+    fieldIsMutable :: Bool,
+    recordFields :: [String]
   }
   deriving (Show, Eq)
 
@@ -87,7 +92,8 @@ polymorphicValues :: Data.Map.Map String TypeScheme
 polymorphicValues =
   let a = TypeVar (-1)
    in Data.Map.fromList
-        [ ("<", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool)))
+        [ ("<", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool))),
+          ("==", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool)))
         ]
 
 -- predefined identifiers / constructs
@@ -100,37 +106,48 @@ initialScope =
         Data.Map.union polymorphicValues $
           Data.Map.map monomorphic $
             Data.Map.fromList
-          [ -- create strings
-            ("string_of_int", TArrow NoLabel TInt TString),
-            ("string_of_bool", TArrow NoLabel TBool TString),
-            ("string_of_float", TArrow NoLabel TFloat TString),
-            -- create ints
-            ("int_of_string", TArrow NoLabel TString TInt),
-            ("int_of_float", TArrow NoLabel TFloat TInt),
-            -- create floats
-            ("float_of_string", TArrow NoLabel TString TFloat),
-            ("float_of_int", TArrow NoLabel TInt TFloat),
-            -- create bool
-            ("bool_of_string", TArrow NoLabel TString TBool),
-            -- TODO: do we need anything for chars?
-            -- IO
-            ("print_endline", TArrow NoLabel TString TUnit),
-            ("read_line", TArrow NoLabel TUnit TString),
-            -- operators
-            ("+", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
-          ],
+              [ -- create strings
+                ("string_of_int", TArrow NoLabel TInt TString),
+                ("string_of_bool", TArrow NoLabel TBool TString),
+                ("string_of_float", TArrow NoLabel TFloat TString),
+                -- create ints
+                ("int_of_string", TArrow NoLabel TString TInt),
+                ("int_of_float", TArrow NoLabel TFloat TInt),
+                -- create floats
+                ("float_of_string", TArrow NoLabel TString TFloat),
+                ("float_of_int", TArrow NoLabel TInt TFloat),
+                -- create bool
+                ("bool_of_string", TArrow NoLabel TString TBool),
+                -- TODO: do we need anything for chars?
+                -- IO
+                ("print_endline", TArrow NoLabel TString TUnit),
+                ("read_line", TArrow NoLabel TUnit TString),
+                -- operators
+                ("+", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("mod", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                -- unary operators
+                -- ocaml does this desugaring too (ie when you do -x that's desugared to ~-x)
+                ("~-", TArrow NoLabel TInt TInt),
+                ("~+", TArrow NoLabel TInt TInt),
+                ("~-.", TArrow NoLabel TFloat TFloat),
+                ("~+.", TArrow NoLabel TFloat TFloat)
+              ],
       constructors =
         let a = TypeVar (-1)
             option = TCon "option" [TVar a]
+            list = TCon "list" [TVar a]
          in Data.Map.fromList
-              [ ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
+              [ -- lists are an ordinary variant type
+                ("[]", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = list}),
+                ("::", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a, list], constructorResult = list}),
+                ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
                 ("Some", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a], constructorResult = option})
               ],
       fields = Data.Map.empty,
@@ -187,18 +204,26 @@ insertValue table path tp = insertScheme table path (monomorphic tp)
 insertScheme :: SymbolTable -> Path -> TypeScheme -> SymbolTable
 insertScheme = insertIn values (\scope m -> scope {values = m})
 
--- generalizes every value bound in the innermost scope, leaving out the given type variables
--- (the ones the surrounding environment still depends on)
-generalizeCurrentScope :: Data.Set.Set TypeVar -> SymbolTable -> TypeVarM SymbolTable
-generalizeCurrentScope _ [] = error "Bad use of symbol table; generalizing no scopes"
-generalizeCurrentScope envVars (current : outer) = do
-  generalized <- mapM generalizeScheme (values current)
+-- the names bound in the innermost scope
+currentScopeNames :: SymbolTable -> [String]
+currentScopeNames [] = []
+currentScopeNames (current : _) = Data.Map.keys (values current)
+
+-- generalizes the given monomorphic values of the innermost scope,
+-- leaving out the given type variables (the ones something else still depends on)
+generalizeNames :: Data.Set.Set TypeVar -> [String] -> SymbolTable -> TypeVarM SymbolTable
+generalizeNames _ _ [] = error "Bad use of symbol table; generalizing no scopes"
+generalizeNames envVars names (current : outer) = do
+  generalized <- foldM generalizeOne (values current) names
   return $ current {values = generalized} : outer
   where
-    -- already-polymorphic values have nothing more to generalize
-    generalizeScheme scheme@(Forall quantified tp)
-      | Data.Set.null quantified = generalize tp envVars
-      | otherwise = return scheme
+    generalizeOne vals name =
+      case Data.Map.lookup name vals of
+        -- already-polymorphic values have nothing more to generalize
+        Just (Forall quantified tp) | Data.Set.null quantified -> do
+          scheme <- generalize tp envVars
+          return $ Data.Map.insert name scheme vals
+        _ -> return vals
 
 -- the unbound type variables that values in scope still depend on
 -- these must not be generalized, since something else could still bind them

@@ -422,22 +422,28 @@ spec = do
     it "parses prefix symbols" $
       parseExpr "!a" `shouldBe` Right (ExprPrefix {op = "!", expr = a})
     it "parses negation" $ do
-      parseExpr "-a" `shouldBe` Right (ExprPrefix {op = "-", expr = a})
-      parseExpr "-.a" `shouldBe` Right (ExprPrefix {op = "-.", expr = a})
+      parseExpr "-a" `shouldBe` Right (ExprPrefix {op = "~-", expr = a})
+      parseExpr "-.a" `shouldBe` Right (ExprPrefix {op = "~-.", expr = a})
+    it "parses unary plus" $ do
+      parseExpr "+a" `shouldBe` Right (ExprPrefix {op = "~+", expr = a})
+      parseExpr "+.a" `shouldBe` Right (ExprPrefix {op = "~+.", expr = a})
+    it "tells binary and unary plus apart" $ do
+      parseExpr "a + +b" `shouldBe` Right (infixE "+" a (ExprPrefix {op = "~+", expr = b}))
+      parseExpr "a +. +.b" `shouldBe` Right (infixE "+." a (ExprPrefix {op = "~+.", expr = b}))
     it "binds negation tighter than binary operators" $
-      parseExpr "-a + b" `shouldBe` Right (infixE "+" (ExprPrefix {op = "-", expr = a}) b)
+      parseExpr "-a + b" `shouldBe` Right (infixE "+" (ExprPrefix {op = "~-", expr = a}) b)
     it "tells binary and unary minus apart" $
-      parseExpr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix {op = "-", expr = b}))
+      parseExpr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix {op = "~-", expr = b}))
     it "applies negation to a whole function application" $
       parseExpr "-f a"
         `shouldBe` Right
           ( ExprPrefix
-              { op = "-",
+              { op = "~-",
                 expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument a]}
               }
           )
     it "binds prefix symbols tighter than negation" $
-      parseExpr "- !a" `shouldBe` Right (ExprPrefix {op = "-", expr = ExprPrefix {op = "!", expr = a}})
+      parseExpr "- !a" `shouldBe` Right (ExprPrefix {op = "~-", expr = ExprPrefix {op = "!", expr = a}})
     it "binds prefix symbols tighter than application" $
       parseExpr "!f x"
         `shouldBe` Right
@@ -489,6 +495,38 @@ spec = do
               { expr = a,
                 field = fieldPath "f",
                 Frontend.Ast.value = b
+              }
+          )
+    it "allows field access as a function argument" $
+      parseExpr "f a.x b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (ExprFieldAccess {expr = a, field = fieldPath "x"}), UnlabeledArgument b]
+              }
+          )
+    it "allows field access as the function being applied" $
+      parseExpr "a.f b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = ExprFieldAccess {expr = a, field = fieldPath "f"},
+                args = [UnlabeledArgument b]
+              }
+          )
+    it "allows array and string access as function arguments" $ do
+      parseExpr "f a.(b)"
+        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (ExprArrayAccess {arr = a, index = b})]})
+      parseExpr "f a.[b]"
+        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (ExprStringAccess {str = a, index = b})]})
+    it "chains field accesses" $
+      parseExpr "a.f.g"
+        `shouldBe` Right (ExprFieldAccess {expr = ExprFieldAccess {expr = a, field = fieldPath "f"}, field = fieldPath "g"})
+    it "allows field access in a labeled argument" $
+      parseExpr "f ~l:a.x"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [LabeledArgument "l" (Just (ExprFieldAccess {expr = a, field = fieldPath "x"}))]
               }
           )
     it "reads a module path before the dot as a path, not a constructor" $
