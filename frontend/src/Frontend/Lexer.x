@@ -121,6 +121,7 @@ tokens :-
     \)                                  { regularToken (const TokenRParen) }
     \*                                  { regularToken (const TokenStar) }
     \+                                  { regularToken (const TokenPlus) }
+    \+\.                                { regularToken (const TokenPlusDot) }
     \,                                  { regularToken (const TokenComma) }
     \-                                  { regularToken (const TokenMinus) }
     \-\.                                { regularToken (const TokenMinusDot) }

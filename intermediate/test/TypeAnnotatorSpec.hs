@@ -338,3 +338,17 @@ spec = do
       infer "let a = 1 and a = 2" `shouldSatisfy` isLeft'
     it "supports local let rec" $
       typeOf "r" "let r = let rec f n = if n < 1 then 0 else f (n - 1) in f 3" `shouldBe` Right TInt
+
+  describe "prefix operators" $ do
+    it "types unary minus as a unary function, not the infix operator" $ do
+      typeOf "f" "let f x = -x" `shouldBe` Right (TArrow NoLabel TInt TInt)
+      typeOf "x" "let f x = -x\nlet x = f 3" `shouldBe` Right TInt
+    it "types unary plus" $ do
+      typeOf "f" "let f x = +x" `shouldBe` Right (TArrow NoLabel TInt TInt)
+      typeOf "f" "let f x = +. x" `shouldBe` Right (TArrow NoLabel TFloat TFloat)
+    it "types unary float minus" $
+      typeOf "f" "let f x = -. x" `shouldBe` Right (TArrow NoLabel TFloat TFloat)
+    it "still types binary minus" $
+      typeOf "r" "let r = 3 - 1" `shouldBe` Right TInt
+    it "rejects negating a non-number" $
+      infer "let r = -\"a\"" `shouldSatisfy` isLeft'

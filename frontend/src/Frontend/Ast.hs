@@ -108,7 +108,9 @@ data Expr
     -- used by both with and record literals; record literals have no source
     ExprRecord {source :: Maybe Expr, fields :: [RecordField]}
   | ExprFunctionApplication {func :: Expr, args :: [Argument]}
-  | ExprPrefix {op :: String, expr :: Expr}
+  | -- unary minus and plus are named ~- and ~+ (and ~-. and ~+.), like in ocaml, since they are also infix operators
+    -- so -x is ExprPrefix "~-" x (and likewise +x is "~+" x); other prefix operators are kept as is (ie ! is still "!")
+    ExprPrefix {op :: String, expr :: Expr}
   | ExprInfix {op :: String, left :: Expr, right :: Expr}
   | ExprFieldAccess {expr :: Expr, field :: Path}
   | ExprFieldAssignment {expr :: Expr, field :: Path, value :: Expr}

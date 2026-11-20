@@ -1,4 +1,8 @@
 {
+-- job of parser = create an AST that represents the source
+-- and desugar any names so that the intermediate tier doesn't need to know
+-- about any name desugaring (ie with prefixes)
+
 module Frontend.Parser where
 -- Import any AST or token types needed here
 import Frontend.Ast
@@ -34,7 +38,7 @@ import qualified Data.List.NonEmpty  as NonEmpty
 %left PREC_INFIX0 INFIXOP0 '=' '<' '>' '!='
 %right PREC_INFIX1 INFIXOP1
 %right '::'
-%left PREC_INFIX2 INFIXOP2 '+' '-' '-.'
+%left PREC_INFIX2 INFIXOP2 '+' '+.' '-' '-.'
 %left PREC_INFIX3 INFIXOP3 '*' MOD LAND LOR LXOR
 %right PREC_INFIX4 INFIXOP4 LSL LSR ASR
 %nonassoc NEGATE_OP -- for prefix negation
@@ -129,6 +133,7 @@ import qualified Data.List.NonEmpty  as NonEmpty
       ')'         { TokenRParen }
       '*'         { TokenStar }
       '+'         { TokenPlus }
+      '+.'        { TokenPlusDot }
       ','         { TokenComma }
       '-'         { TokenMinus }
       '-.'        { TokenMinusDot }
@@ -232,6 +237,7 @@ InfixOp1
 InfixOp2
   : INFIXOP2                    { $1 }
   | '+'                         { "+" }
+  | '+.'                        { "+." }
   | '-'                         { "-" }
   | '-.'                        { "-." }
 
@@ -473,8 +479,12 @@ Expr
   | ExprConsList %prec BELOW_COMMA                  { ExprCons $1 }
   -- function application
   | AtomExpr many1(Argument)  { ExprFunctionApplication $1 $2 }
-  | '-' Expr %prec NEGATE_OP    { ExprPrefix "-" $2 }
-  | '-.' Expr %prec NEGATE_OP  { ExprPrefix "-." $2 }
+  -- unary minus and plus are named ~- and ~+ (and ~-. and ~+.) like in ocaml,
+  -- so they can't be confused with the infix operators
+  | '+' Expr %prec NEGATE_OP    { ExprPrefix "~+" $2 }
+  | '+.' Expr %prec NEGATE_OP   { ExprPrefix "~+." $2 }
+  | '-' Expr %prec NEGATE_OP    { ExprPrefix "~-" $2 }
+  | '-.' Expr %prec NEGATE_OP  { ExprPrefix "~-." $2 }
   -- infix operators; need to list them all out to get precendence right
   | Expr ':=' Expr                       { ExprInfix ":=" $1 $3 }
   | Expr InfixOpOr Expr  %prec PREC_OR   { ExprInfix $2 $1 $3 }

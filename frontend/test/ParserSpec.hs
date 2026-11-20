@@ -422,22 +422,28 @@ spec = do
     it "parses prefix symbols" $
       parseExpr "!a" `shouldBe` Right (ExprPrefix {op = "!", expr = a})
     it "parses negation" $ do
-      parseExpr "-a" `shouldBe` Right (ExprPrefix {op = "-", expr = a})
-      parseExpr "-.a" `shouldBe` Right (ExprPrefix {op = "-.", expr = a})
+      parseExpr "-a" `shouldBe` Right (ExprPrefix {op = "~-", expr = a})
+      parseExpr "-.a" `shouldBe` Right (ExprPrefix {op = "~-.", expr = a})
+    it "parses unary plus" $ do
+      parseExpr "+a" `shouldBe` Right (ExprPrefix {op = "~+", expr = a})
+      parseExpr "+.a" `shouldBe` Right (ExprPrefix {op = "~+.", expr = a})
+    it "tells binary and unary plus apart" $ do
+      parseExpr "a + +b" `shouldBe` Right (infixE "+" a (ExprPrefix {op = "~+", expr = b}))
+      parseExpr "a +. +.b" `shouldBe` Right (infixE "+." a (ExprPrefix {op = "~+.", expr = b}))
     it "binds negation tighter than binary operators" $
-      parseExpr "-a + b" `shouldBe` Right (infixE "+" (ExprPrefix {op = "-", expr = a}) b)
+      parseExpr "-a + b" `shouldBe` Right (infixE "+" (ExprPrefix {op = "~-", expr = a}) b)
     it "tells binary and unary minus apart" $
-      parseExpr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix {op = "-", expr = b}))
+      parseExpr "a - -b" `shouldBe` Right (infixE "-" a (ExprPrefix {op = "~-", expr = b}))
     it "applies negation to a whole function application" $
       parseExpr "-f a"
         `shouldBe` Right
           ( ExprPrefix
-              { op = "-",
+              { op = "~-",
                 expr = ExprFunctionApplication {func = var "f", args = [UnlabeledArgument a]}
               }
           )
     it "binds prefix symbols tighter than negation" $
-      parseExpr "- !a" `shouldBe` Right (ExprPrefix {op = "-", expr = ExprPrefix {op = "!", expr = a}})
+      parseExpr "- !a" `shouldBe` Right (ExprPrefix {op = "~-", expr = ExprPrefix {op = "!", expr = a}})
     it "binds prefix symbols tighter than application" $
       parseExpr "!f x"
         `shouldBe` Right

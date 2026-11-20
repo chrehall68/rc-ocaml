@@ -4,8 +4,8 @@ import Control.Monad (forM, forM_, when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
-import Data.List (partition, (\\))
 import Data.Foldable (foldrM)
+import Data.List (partition, (\\))
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
 import Data.Maybe (fromMaybe)
@@ -275,7 +275,7 @@ lowerExpr expr =
       mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) typedElements
       -- everything worked
       return $ TEArray (TCon "array" [TVar innerVar]) typedElements
-    -- TODO: implement the many other expr types between ExprPath and ExprInfix
+    Ast.ExprRecord source fields -> throwError "records not implemented yet"
     Ast.ExprFunctionApplication func args -> do
       typedFunc <- lowerExpr func
       -- then the application needs to work
@@ -296,7 +296,16 @@ lowerExpr expr =
       when (Data.Map.size labeled /= length labeledList || Data.Map.size optional /= length optionalList) $
         throwError "the same label was given more than once in a function application"
       applyCurriedFunction typedFunc (unlabeled, labeled, optional)
-    -- TODO: Prefix
+    Ast.ExprPrefix op prefixExpr -> do
+      symtab <- gets symbolTable
+      opScheme <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
+      opType <- liftTypes $ instantiate opScheme
+      typedExpr <- lowerExpr prefixExpr
+      -- similar to infix, but simpler unification
+      outputType <- liftTypes newTypeVar
+      let desiredType = TArrow NoLabel (exprAnnotation typedExpr) (TVar outputType)
+      () <- unifyOrRollback desiredType opType
+      return $ TEApply (TVar outputType) (TEVar opType (Ast.Path Nothing op)) typedExpr
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable
       opScheme <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
@@ -589,7 +598,8 @@ lowerTypeDefinitions isNonrec typedefs = do
     when (not (null (Ast.typedefConstraints td))) $ throwError "constraints not supported yet"
     let paramNames = Ast.typedefParams td
     when (length paramNames /= length (Data.Set.fromList paramNames)) $
-      throwError $ "type " ++ Ast.typedefName td ++ " has a repeated type parameter"
+      throwError $
+        "type " ++ Ast.typedefName td ++ " has a repeated type parameter"
     paramVars <- mapM (const $ liftTypes newTypeVar) paramNames
     return (td, paramVars)
   let isAlias (td, _) = case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
@@ -599,7 +609,8 @@ lowerTypeDefinitions isNonrec typedefs = do
   -- every type that isn't an alias is its own distinct type,
   -- so in a recursive group it can be referred to before its body is lowered
   when (not isNonrec) $
-    forM_ nominals $ \(td, vars) -> registerType (Ast.typedefName td) (nominalInfo td vars)
+    forM_ nominals $
+      \(td, vars) -> registerType (Ast.typedefName td) (nominalInfo td vars)
   -- aliases first, so the variants can use them
   aliasInfos <- forM aliases $ \(td, vars) -> do
     body <- withTypeParams td vars $ case Ast.typedefEquation td of
@@ -648,7 +659,8 @@ bindMonomorphic name tp = do
   symtab <- gets symbolTable
   let pathName = Ast.Path Nothing name
   when (isRight $ SymTab.resolveValueInLast symtab pathName) $
-    throwError $ "variable " ++ name ++ " bound multiple times in this binding"
+    throwError $
+      "variable " ++ name ++ " bound multiple times in this binding"
   modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) pathName tp})
 
 -- what a let binding binds

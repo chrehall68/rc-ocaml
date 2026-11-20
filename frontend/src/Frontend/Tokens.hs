@@ -102,6 +102,7 @@ data Token
   | TokenRParen
   | TokenStar
   | TokenPlus
+  | TokenPlusDot
   | TokenComma
   | TokenMinus
   | TokenMinusDot

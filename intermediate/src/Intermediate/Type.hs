@@ -2,7 +2,7 @@ module Intermediate.Type (TypeVar (..), ArgLabel (..), Type (..), TypeVarState (
 
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, throwError)
-import Control.Monad.State (State, evalState, gets, modify)
+import Control.Monad.State (State, gets, modify)
 import Control.Monad.Trans
 import qualified Data.Map
 import Data.Maybe (isNothing)
@@ -57,9 +57,6 @@ data TypeScheme = Forall (Data.Set.Set TypeVar) Type
 
 initialTypeVarState :: TypeVarState
 initialTypeVarState = TypeVarState {lastUsedTypeId = 0, substitutions = Data.Map.empty}
-
-runTypeVarM :: TypeVarM a -> a
-runTypeVarM m = evalState m initialTypeVarState
 
 -- creates a fresh, unbound type variable with a unique id
 newTypeVar :: TypeVarM TypeVar

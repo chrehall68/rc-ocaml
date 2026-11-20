@@ -102,32 +102,38 @@ initialScope =
         Data.Map.union polymorphicValues $
           Data.Map.map monomorphic $
             Data.Map.fromList
-          [ -- create strings
-            ("string_of_int", TArrow NoLabel TInt TString),
-            ("string_of_bool", TArrow NoLabel TBool TString),
-            ("string_of_float", TArrow NoLabel TFloat TString),
-            -- create ints
-            ("int_of_string", TArrow NoLabel TString TInt),
-            ("int_of_float", TArrow NoLabel TFloat TInt),
-            -- create floats
-            ("float_of_string", TArrow NoLabel TString TFloat),
-            ("float_of_int", TArrow NoLabel TInt TFloat),
-            -- create bool
-            ("bool_of_string", TArrow NoLabel TString TBool),
-            -- TODO: do we need anything for chars?
-            -- IO
-            ("print_endline", TArrow NoLabel TString TUnit),
-            ("read_line", TArrow NoLabel TUnit TString),
-            -- operators
-            ("+", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
-            ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
-          ],
+              [ -- create strings
+                ("string_of_int", TArrow NoLabel TInt TString),
+                ("string_of_bool", TArrow NoLabel TBool TString),
+                ("string_of_float", TArrow NoLabel TFloat TString),
+                -- create ints
+                ("int_of_string", TArrow NoLabel TString TInt),
+                ("int_of_float", TArrow NoLabel TFloat TInt),
+                -- create floats
+                ("float_of_string", TArrow NoLabel TString TFloat),
+                ("float_of_int", TArrow NoLabel TInt TFloat),
+                -- create bool
+                ("bool_of_string", TArrow NoLabel TString TBool),
+                -- TODO: do we need anything for chars?
+                -- IO
+                ("print_endline", TArrow NoLabel TString TUnit),
+                ("read_line", TArrow NoLabel TUnit TString),
+                -- operators
+                ("+", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("-", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
+                -- unary operators
+                -- ocaml does this desugaring too (ie when you do -x that's desugared to ~-x)
+                ("~-", TArrow NoLabel TInt TInt),
+                ("~+", TArrow NoLabel TInt TInt),
+                ("~-.", TArrow NoLabel TFloat TFloat),
+                ("~+.", TArrow NoLabel TFloat TFloat)
+              ],
       constructors =
         let a = TypeVar (-1)
             option = TCon "option" [TVar a]
