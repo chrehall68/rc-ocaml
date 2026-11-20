@@ -1,5 +1,6 @@
 module Frontend.Ast where
 
+import Data.List.NonEmpty (NonEmpty)
 import Frontend.Tokens
 
 -- names (https://ocaml.org/manual/5.3/names.html)
@@ -35,7 +36,7 @@ data Constant
   deriving (Show, Eq)
 
 data TypeExpr
-  = TypeExpr -- wildcard type _; fuller type syntax can be added incrementally
+  = TypeExprWildcard -- wildcard type _; fuller type syntax can be added incrementally
   | TypeName ExtendedPath
   | TypeVariable String
   | TypeArrow TypeExpr TypeExpr
@@ -95,18 +96,21 @@ data Expr
   | -- `Tagname expr would give (ExprNonconstantPolymorphicVariant "Tagname" expr)
     ExprNonconstantPolymorphicVariant {tagname :: String, expr :: Expr}
   | ExprAnnotated {expr :: Expr, typeExpr :: TypeExpr}
-  | ExprTuple [Expr]
+  | -- a tuple always has at least two elements
+    ExprTuple Expr Expr [Expr]
   | -- the expressions are in order of appearance (left to right)
     -- utop evaluates the expression from right to left, but technically
     -- the manual says the order is unspecified; same applies to lists (which is why
     -- we represent them as ExprCons too)
-    ExprCons [Expr]
-  | ExprArray [Expr]
+    ExprCons (NonEmpty Expr)
+  | ExprArray (NonEmpty Expr)
   | -- source record, changed fields
     -- used by both with and record literals; record literals have no source
     ExprRecord {source :: Maybe Expr, fields :: [RecordField]}
   | ExprFunctionApplication {func :: Expr, args :: [Argument]}
-  | ExprPrefix {op :: String, expr :: Expr}
+  | -- unary minus and plus are named ~- and ~+ (and ~-. and ~+.), like in ocaml, since they are also infix operators
+    -- so -x is ExprPrefix "~-" x (and likewise +x is "~+" x); other prefix operators are kept as is (ie ! is still "!")
+    ExprPrefix {op :: String, expr :: Expr}
   | ExprInfix {op :: String, left :: Expr, right :: Expr}
   | ExprFieldAccess {expr :: Expr, field :: Path}
   | ExprFieldAssignment {expr :: Expr, field :: Path, value :: Expr}

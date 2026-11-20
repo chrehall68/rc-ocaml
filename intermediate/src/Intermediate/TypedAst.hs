@@ -1,6 +1,8 @@
 -- typed AST produced by type checking
 -- every node carries an annotation t (which holds the in-progress or resolved Type).
 -- This allows automatic traversal (since Traversable requires this kind)
+-- Note: while the typed AST guarantees types match up,
+-- it doesn't guarantee that matches are exhaustive
 
 -- We also lower some language constructs:
 --   - f a b                     -> TEApply (TEApply f a) b
@@ -10,41 +12,66 @@
 --   - function cases            -> TEFunction cases
 --   - let f x y = e             -> let f = fun x y -> e
 --   - if c then e               -> if c then e else ()
---   - a :: b :: c, [a; b]       -> nested TECons
---   - [p1; p2] (pattern)        -> nested TPCons
+--   - a :: b :: c, [a; b]       -> nested TEVariant "::" (TETuple [head; tail]),
+--                                  ending in the constant constructor "[]"
+--   - [p1; p2] (pattern)        -> nested TPVariant "::" (TPTuple [head; tail]),
+--                                  ending in the constant constructor "[]"
 
 module Intermediate.TypedAst where
 
-import Frontend.Ast (Constant, Path, TypeDefinition)
+import Data.List.NonEmpty (NonEmpty)
+import Frontend.Ast (Path, TypeDefinition)
+import Frontend.Tokens (IntLiteral)
 import Intermediate.Type (ArgLabel)
 
--- t is always the value of the result of the expression
--- ie for a function, it would be the result of the function application (not the type of the function)
+-- the constants that can remain after lowering
+-- (unlike the parsed Constant, there is no list constant: [] is the constant constructor "[]")
+data TConstant
+  = TConstInt IntLiteral
+  | TConstDouble Double
+  | TConstChar Char
+  | TConstString String
+  | TConstBool Bool
+  | TConstUnit
+  | -- the empty array [||]
+    TConstEmptyArray
+  | -- a constructor without arguments, including [] and None
+    TConstVariant Path
+  | -- `Tagname
+    TConstPolymorphicVariant String
+  deriving (Show, Eq)
+
+-- t is the type of the expression itself
+-- thus for TEApply, t is the result of the application,
+-- while for TEFunction t is the whole arrow type
 data TExpr t
-  = TEConstant t Constant
+  = TEConstant t TConstant
   | -- a (potentially module-qualified) value name, including operators like (+)
     TEVar t Path
   | -- constructor applied to its argument; constant constructors stay in TEConstant
+    -- a constructor with several arguments takes them as one tuple
     TEVariant t Path (TExpr t)
   | -- TODO: needs row types before it can be typed
     TEPolymorphicVariant t String (TExpr t)
-  | TETuple t [TExpr t]
-  | -- head, tail
-    TECons t (TExpr t) (TExpr t)
-  | TEArray t [TExpr t]
+  | -- a tuple always has at least two elements
+    TETuple t (TExpr t) (TExpr t) [TExpr t]
+  | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
     TERecord t (Maybe (TExpr t)) [(Path, TExpr t)]
-  | -- function, how the argument is passed, argument
+  | -- function, argument
     -- labeled arguments are reordered to match the function's parameter order,
     -- and omitted optional arguments are filled in with None
-    TEApply t (TExpr t) ArgLabel (TExpr t)
+    TEApply t (TExpr t) (TExpr t)
   | TEFieldAccess t (TExpr t) Path
   | TEFieldAssignment t (TExpr t) Path (TExpr t)
-  | TEIf t (TExpr t) (TExpr t) (TExpr t)
-  | TEWhile t (TExpr t) (TExpr t)
+  | -- if is cond then else
+    TEIf t (TExpr t) (TExpr t) (TExpr t)
+  | -- while is cond body
+    TEWhile t (TExpr t) (TExpr t)
   | -- loop variable, start, end, isTo, body
     TEFor t String (TExpr t) (TExpr t) Bool (TExpr t)
-  | TESequence t (TExpr t) (TExpr t)
+  | -- left right
+    TESequence t (TExpr t) (TExpr t)
   | TEMatch t (TExpr t) [TCase t]
   | -- a one-argument function that matches its argument against the cases
     -- the default is only present for optional parameters, e.g. ?(x = 1)
@@ -64,7 +91,7 @@ data TLetBinding t = TLetBinding (TPattern t) (TExpr t)
 data TPattern t
   = TPVariable t String
   | TPWildcard t
-  | TPConstant t Constant
+  | TPConstant t TConstant
   | TPAlias t (TPattern t) String
   | TPOr t (TPattern t) (TPattern t)
   | TPVariant t Path (TPattern t)
@@ -73,8 +100,6 @@ data TPattern t
   | -- #typ, matches any polymorphic variant tag in typ
     TPType t Path
   | TPTuple t [TPattern t]
-  | -- head, tail
-    TPCons t (TPattern t) (TPattern t)
   | TPArray t [TPattern t]
   | -- the trailing ; _ doesn't matter once the record type is known
     TPRecord t [(Path, TPattern t)]
@@ -100,11 +125,10 @@ exprAnnotation e = case e of
   TEVar t _ -> t
   TEVariant t _ _ -> t
   TEPolymorphicVariant t _ _ -> t
-  TETuple t _ -> t
-  TECons t _ _ -> t
+  TETuple t _ _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t
-  TEApply t _ _ _ -> t
+  TEApply t _ _ -> t
   TEFieldAccess t _ _ -> t
   TEFieldAssignment t _ _ _ -> t
   TEIf t _ _ _ -> t
@@ -127,7 +151,6 @@ patternAnnotation p = case p of
   TPPolymorphicVariant t _ _ -> t
   TPType t _ -> t
   TPTuple t _ -> t
-  TPCons t _ _ -> t
   TPArray t _ -> t
   TPRecord t _ -> t
   TPRange t _ _ -> t
