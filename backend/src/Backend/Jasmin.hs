@@ -3,12 +3,14 @@ module Backend.Jasmin (generateJasmin) where
 import Control.Monad (foldM, unless, when)
 import Control.Monad.State.Strict (StateT, get, lift, put, runStateT)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, ord)
+import Data.List (isSuffixOf)
 import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.Type (ArgLabel (..), Type (..))
 import Intermediate.TypedAst
 import Numeric (showHex)
+import Text.Read (readMaybe)
 
 -- | Emit a Jasmin class with a static main method. The class name uses JVM
 -- internal form (for example, "example/Program"). Start an unqualified
@@ -24,6 +26,8 @@ generateJasmin className (TProgram definitions) = do
   ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1 0)
   let locals = nextLocal finalState
   when (locals > 65535 || peak code > 65535) $ Left "JVM method exceeds the stack or locals limit"
+  let body = render code ["  return"]
+  validateBytecode body
   pure $ unlines $
     [ ".class public " ++ className,
       ".super java/lang/Object",
@@ -31,7 +35,7 @@ generateJasmin className (TProgram definitions) = do
       ".method public static main([Ljava/lang/String;)V",
       "  .limit stack " ++ show (peak code),
       "  .limit locals " ++ show locals
-    ] ++ render code ["  return", ".end method"]
+    ] ++ body ++ [".end method"]
 
 validClassName :: String -> Bool
 validClassName = validPart False
@@ -44,6 +48,47 @@ validClassName = validPart False
             [] -> qualified || not (isAsciiLower first)
             _ : remaining -> validPart True remaining
     identifierStart c = isAsciiLower c || isAsciiUpper c || c == '_' || c == '$'
+
+-- JVM methods may contain at most 65,535 bytes of code, and the branches we
+-- emit use signed 16-bit offsets. Use upper bounds for ldc and local access
+-- sizes where Jasmin chooses the final instruction encoding.
+validateBytecode :: [String] -> Either String ()
+validateBytecode body = do
+  sizes <- mapM bytecodeSize body
+  let positions = init (scanl (+) 0 sizes)
+      total = sum sizes
+      targets = Map.fromList [(init line, offset) | (line, offset) <- zip body positions, ":" `isSuffixOf` line]
+  when (total > 65535) $ Left "JVM method exceeds the 65,535-byte code limit"
+  mapM_ (checkBranch targets) (zip body positions)
+  where
+    checkBranch targets (line, offset) = case words line of
+      [op, target] | op `elem` branches -> case Map.lookup target targets of
+        Nothing -> Left ("Missing JVM branch label " ++ target)
+        Just destination ->
+          when (destination - offset < -32768 || destination - offset > 32767) $
+            Left ("JVM branch to " ++ target ++ " exceeds the 16-bit offset limit")
+      _ -> Right ()
+
+    branches = ["ifeq", "ifgt", "iflt", "goto"]
+
+bytecodeSize :: String -> Either String Int
+bytecodeSize line
+  | ":" `isSuffixOf` line = Right 0
+  | otherwise = case words line of
+      [op] | op `elem` oneByte -> Right 1
+      [op, _] | op `elem` ["ifeq", "ifgt", "iflt", "goto"] -> Right 3
+      [op, slot] | op `elem` localAccess -> case readMaybe slot of
+        Just n | n >= (0 :: Int) && n <= 65535 -> Right (if n <= 255 then 2 else 4)
+        _ -> Left ("Invalid JVM local index " ++ slot)
+      (op : _) | op `elem` ["ldc", "ldc2_w", "getstatic", "invokevirtual", "invokestatic", "anewarray"] -> Right 3
+      _ -> Left ("Unknown JVM instruction size for " ++ line)
+  where
+    oneByte =
+      [ "return", "pop", "pop2", "lcmp", "ladd", "lsub", "lmul", "ldiv",
+        "dadd", "dsub", "dmul", "ddiv", "dneg", "l2d", "lshl", "lshr",
+        "lconst_1", "dconst_0", "dconst_1", "iconst_0", "iconst_1", "aconst_null"
+      ]
+    localAccess = ["iload", "istore", "lload", "lstore", "dload", "dstore", "aload", "astore"]
 
 -- Stack heights are measured in JVM slots. Double and long use two slots.
 -- Each compiled expression leaves only its result above the incoming stack.

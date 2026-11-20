@@ -52,6 +52,16 @@ main = hspec $ describe "generateJasmin" $ do
   it "rejects unqualified names that could be Jasmin keywords" $
     generateJasmin "return" (TProgram []) `shouldBe` Left "Invalid JVM class name \"return\""
 
+  it "rejects methods that exceed the JVM code size limit" $ do
+    let program = TProgram (replicate 17000 (TDefinitionExpr (integer 1)))
+    generateJasmin "Program" program `shouldSatisfy` either (isInfixOf "65,535-byte code limit") (const False)
+
+  it "rejects branch targets outside a signed 16-bit offset" $ do
+    let skipped = TLetBinding (TPWildcard TInt) (integer 1)
+        largeBranch = TELet TUnit False (replicate 9000 skipped) (TEConstant TUnit ConstantUnit)
+        expression = TEIf TUnit (TEConstant TBool (ConstantBool False)) largeBranch (TEConstant TUnit ConstantUnit)
+    generateExpressions [expression] `shouldSatisfy` either (isInfixOf "16-bit offset limit") (const False)
+
 generateExpressions :: [TExpr Type] -> Either String String
 generateExpressions = generateJasmin "Program" . TProgram . map TDefinitionExpr
 
