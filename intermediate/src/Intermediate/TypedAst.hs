@@ -1,6 +1,8 @@
 -- typed AST produced by type checking
 -- every node carries an annotation t (which holds the in-progress or resolved Type).
 -- This allows automatic traversal (since Traversable requires this kind)
+-- Note: while the typed AST guarantees types match up,
+-- it doesn't guarantee that matches are exhaustive
 
 -- We also lower some language constructs:
 --   - f a b                     -> TEApply (TEApply f a) b
@@ -15,11 +17,13 @@
 
 module Intermediate.TypedAst where
 
+import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Constant, Path, TypeDefinition)
 import Intermediate.Type (ArgLabel)
 
--- t is always the value of the result of the expression
--- ie for a function, it would be the result of the function application (not the type of the function)
+-- t is the type of the expression itself
+-- thus for TEApply, t is the result of the application,
+-- while for TEFunction t is the whole arrow type
 data TExpr t
   = TEConstant t Constant
   | -- a (potentially module-qualified) value name, including operators like (+)
@@ -28,23 +32,27 @@ data TExpr t
     TEVariant t Path (TExpr t)
   | -- TODO: needs row types before it can be typed
     TEPolymorphicVariant t String (TExpr t)
-  | TETuple t [TExpr t]
+  | -- a tuple always has at least two elements
+    TETuple t (TExpr t) (TExpr t) [TExpr t]
   | -- head, tail
     TECons t (TExpr t) (TExpr t)
-  | TEArray t [TExpr t]
+  | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
     TERecord t (Maybe (TExpr t)) [(Path, TExpr t)]
-  | -- function, how the argument is passed, argument
+  | -- function, argument
     -- labeled arguments are reordered to match the function's parameter order,
     -- and omitted optional arguments are filled in with None
-    TEApply t (TExpr t) ArgLabel (TExpr t)
+    TEApply t (TExpr t) (TExpr t)
   | TEFieldAccess t (TExpr t) Path
   | TEFieldAssignment t (TExpr t) Path (TExpr t)
-  | TEIf t (TExpr t) (TExpr t) (TExpr t)
-  | TEWhile t (TExpr t) (TExpr t)
+  | -- if is cond then else
+    TEIf t (TExpr t) (TExpr t) (TExpr t)
+  | -- while is cond body
+    TEWhile t (TExpr t) (TExpr t)
   | -- loop variable, start, end, isTo, body
     TEFor t String (TExpr t) (TExpr t) Bool (TExpr t)
-  | TESequence t (TExpr t) (TExpr t)
+  | -- left right
+    TESequence t (TExpr t) (TExpr t)
   | TEMatch t (TExpr t) [TCase t]
   | -- a one-argument function that matches its argument against the cases
     -- the default is only present for optional parameters, e.g. ?(x = 1)
@@ -100,11 +108,11 @@ exprAnnotation e = case e of
   TEVar t _ -> t
   TEVariant t _ _ -> t
   TEPolymorphicVariant t _ _ -> t
-  TETuple t _ -> t
+  TETuple t _ _ _ -> t
   TECons t _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t
-  TEApply t _ _ _ -> t
+  TEApply t _ _ -> t
   TEFieldAccess t _ _ -> t
   TEFieldAssignment t _ _ _ -> t
   TEIf t _ _ _ -> t

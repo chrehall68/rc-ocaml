@@ -1,10 +1,11 @@
 module ParserSpec (spec) where
 
+import Data.List.NonEmpty (fromList)
 import Frontend.Ast
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
-import Test.Hspec
 import Frontend.Tokens
+import Test.Hspec
 
 -- lex and parse a whole source string
 parseSource :: String -> Either String Program
@@ -65,23 +66,35 @@ spec = do
         `shouldBe` Right (ExprLet False [LetBindingTyped "x" [] Nothing Nothing (int 1)] (var "x"))
     it "accepts destructuring patterns" $
       parseExpr "let (x, y) = pair in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingPattern (PatternTuple [PatternVariable "x", PatternVariable "y"]) (var "pair")]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingPattern (PatternTuple [PatternVariable "x", PatternVariable "y"]) (var "pair")]
+              (var "x")
+          )
     it "accepts constructor, list, and annotated patterns" $ do
       let t = TypeName (ExtendedPath Nothing "t")
       parseExpr "let Some x = option in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingPattern (PatternVariant (Path Nothing "Some") (PatternVariable "x")) (var "option")]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingPattern (PatternVariant (Path Nothing "Some") (PatternVariable "x")) (var "option")]
+              (var "x")
+          )
       parseExpr "let [x; y] = values in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingPattern (PatternList [PatternVariable "x", PatternVariable "y"]) (var "values")]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingPattern (PatternList [PatternVariable "x", PatternVariable "y"]) (var "values")]
+              (var "x")
+          )
       parseExpr "let (x : t) = y in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingPattern (PatternAnnotated (PatternVariable "x") t) (var "y")]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingPattern (PatternAnnotated (PatternVariable "x") t) (var "y")]
+              (var "x")
+          )
     it "retains type annotations and coercions for named bindings" $ do
       let t = TypeName (ExtendedPath Nothing "t")
       parseExpr "let x : t = y in x"
@@ -94,36 +107,57 @@ spec = do
     it "accepts parameterized named bindings" $ do
       let t = TypeName (ExtendedPath Nothing "t")
       parseExpr "let f x = x in f"
-        `shouldBe` Right (ExprLet False
-          [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] Nothing Nothing (var "x")]
-          (var "f"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] Nothing Nothing (var "x")]
+              (var "f")
+          )
       parseExpr "let f x : t = x in f"
-        `shouldBe` Right (ExprLet False
-          [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] (Just t) Nothing (var "x")]
-          (var "f"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingTyped "f" [ParameterPattern (PatternVariable "x")] (Just t) Nothing (var "x")]
+              (var "f")
+          )
     it "keeps recursive bindings and nested let expressions" $ do
       parseExpr "let rec x = y in x"
         `shouldBe` Right (ExprLet True [LetBindingTyped "x" [] Nothing Nothing (var "y")] (var "x"))
       parseExpr "let x = let y = a in y in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingTyped "x" [] Nothing Nothing
-            (ExprLet False [LetBindingTyped "y" [] Nothing Nothing (var "a")] (var "y"))]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [ LetBindingTyped
+                  "x"
+                  []
+                  Nothing
+                  Nothing
+                  (ExprLet False [LetBindingTyped "y" [] Nothing Nothing (var "a")] (var "y"))
+              ]
+              (var "x")
+          )
     it "rejects malformed bindings" $ do
       parseExpr "let x = in x" `shouldSatisfy` isLeft
       parseExpr "let f = in f" `shouldSatisfy` isLeft
       parseExpr "let x : = y in x" `shouldSatisfy` isLeft
     it "parses a sequence on a plain variable binding RHS" $
       parseExpr "let x = a; b in x"
-        `shouldBe` Right (ExprLet False
-          [LetBindingTyped "x" [] Nothing Nothing (ExprSequence (var "a") (var "b"))]
-          (var "x"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [LetBindingTyped "x" [] Nothing Nothing (ExprSequence (var "a") (var "b"))]
+              (var "x")
+          )
     it "allows multiple bindings with different binder forms" $
       parseExpr "let x = a and (y, z) = b in y"
-        `shouldBe` Right (ExprLet False
-          [ LetBindingTyped "x" [] Nothing Nothing (var "a"),
-            LetBindingPattern (PatternTuple [PatternVariable "y", PatternVariable "z"]) (var "b")
-          ] (var "y"))
+        `shouldBe` Right
+          ( ExprLet
+              False
+              [ LetBindingTyped "x" [] Nothing Nothing (var "a"),
+                LetBindingPattern (PatternTuple [PatternVariable "y", PatternVariable "z"]) (var "b")
+              ]
+              (var "y")
+          )
 
   describe "module items" $ do
     it "separates expressions with ;;" $
@@ -141,8 +175,11 @@ spec = do
     it "parses rec and and" $
       itemsOf "let rec x = y and y = x"
         `shouldBe` Right
-          [ Definition (DefinitionLet True
-              [LetBindingTyped "x" [] Nothing Nothing (var "y"), LetBindingTyped "y" [] Nothing Nothing (var "x")])
+          [ Definition
+              ( DefinitionLet
+                  True
+                  [LetBindingTyped "x" [] Nothing Nothing (var "y"), LetBindingTyped "y" [] Nothing Nothing (var "x")]
+              )
           ]
     it "allows consecutive definitions without ;;" $
       itemsOf "let x = 1 let y = 2" `shouldBe` Right [letDef "x" (int 1), letDef "y" (int 2)]
@@ -293,20 +330,19 @@ spec = do
       parseExpr "f a, g b"
         `shouldBe` Right
           ( ExprTuple
-              [ ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "a")]},
-                ExprFunctionApplication {func = var "g", args = [UnlabeledArgument (var "b")]}
-              ]
+              (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "a")]})
+              (ExprFunctionApplication {func = var "g", args = [UnlabeledArgument (var "b")]})
+              []
           )
     it "binds tighter than ::" $
       parseExpr "f a :: b"
         `shouldBe` Right
           ( ExprCons
-              [ ExprFunctionApplication
-                  { func = var "f",
-                    args = [UnlabeledArgument (var "a")]
-                  },
-                var "b"
-              ]
+              ( fromList
+                  [ ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (var "a")]},
+                    var "b"
+                  ]
+              )
           )
     it "can't be the application of a bare constructor" $
       parseExpr "C 1" `shouldBe` Right (ExprNonconstantVariant {constr = Path Nothing "C", expr = int 1})
@@ -353,9 +389,9 @@ spec = do
     it "associates := to the right" $
       parseExpr "a := b := c" `shouldBe` Right (infixE ":=" a (infixE ":=" b c))
     it "binds + tighter than ::" $
-      parseExpr "a + b :: c" `shouldBe` Right (ExprCons [infixE "+" a b, c])
+      parseExpr "a + b :: c" `shouldBe` Right (ExprCons (fromList [infixE "+" a b, c]))
     it "binds :: tighter than @" $
-      parseExpr "a :: b @ c" `shouldBe` Right (infixE "@" (ExprCons [a, b]) c)
+      parseExpr "a :: b @ c" `shouldBe` Right (infixE "@" (ExprCons (fromList [a, b])) c)
     it "binds @ tighter than =" $
       parseExpr "a @ b = c" `shouldBe` Right (infixE "=" (infixE "@" a b) c)
     it "binds = tighter than &&" $
@@ -363,9 +399,9 @@ spec = do
     it "binds && tighter than ||" $
       parseExpr "a || b && c" `shouldBe` Right (infixE "||" a (infixE "&&" b c))
     it "binds || tighter than ," $
-      parseExpr "a || b, c" `shouldBe` Right (ExprTuple [infixE "||" a b, c])
+      parseExpr "a || b, c" `shouldBe` Right (ExprTuple (infixE "||" a b) c [])
     it "binds , tighter than :=" $
-      parseExpr "a := b, c" `shouldBe` Right (infixE ":=" a (ExprTuple [b, c]))
+      parseExpr "a := b, c" `shouldBe` Right (infixE ":=" a (ExprTuple b c []))
     it "binds function application tighter than operators" $
       parseExpr "f a + g b"
         `shouldBe` Right
@@ -480,7 +516,7 @@ spec = do
           ( ExprFieldAssignment
               { expr = a,
                 field = fieldPath "f",
-                Frontend.Ast.value = ExprTuple [b, c]
+                Frontend.Ast.value = ExprTuple b c []
               }
           )
     it "associates <- and := together to the right" $
@@ -495,56 +531,59 @@ spec = do
 
   describe "tuples" $ do
     it "parses a flat tuple" $
-      parseExpr "a, b, c" `shouldBe` Right (ExprTuple [var "a", var "b", var "c"])
+      parseExpr "a, b, c" `shouldBe` Right (ExprTuple (var "a") (var "b") [var "c"])
     it "keeps a parenthesized tuple on the left nested" $
-      parseExpr "(a, b), c" `shouldBe` Right (ExprTuple [ExprTuple [var "a", var "b"], var "c"])
+      parseExpr "(a, b), c" `shouldBe` Right (ExprTuple (ExprTuple (var "a") (var "b") []) (var "c") [])
     it "keeps a parenthesized tuple on the right nested" $
-      parseExpr "a, (b, c)" `shouldBe` Right (ExprTuple [var "a", ExprTuple [var "b", var "c"]])
+      parseExpr "a, (b, c)" `shouldBe` Right (ExprTuple (var "a") (ExprTuple (var "b") (var "c") []) [])
     it "binds constructor application tighter than ," $
       parseExpr "C a, b"
         `shouldBe` Right
           ( ExprTuple
-              [ ExprNonconstantVariant
+              ( ExprNonconstantVariant
                   { constr = Path Nothing "C",
                     expr = var "a"
-                  },
-                var "b"
-              ]
+                  }
+              )
+              (var "b")
+              []
           )
     it "lets parentheses move the comma inside the application" $
       parseExpr "C (a, b)"
         `shouldBe` Right
           ( ExprNonconstantVariant
               { constr = Path Nothing "C",
-                expr = ExprTuple [var "a", var "b"]
+                expr = ExprTuple (var "a") (var "b") []
               }
           )
 
   describe "cons" $ do
     it "parses a chain of ::" $
-      parseExpr "a :: b :: c" `shouldBe` Right (ExprCons [var "a", var "b", var "c"])
+      parseExpr "a :: b :: c" `shouldBe` Right (ExprCons (fromList [var "a", var "b", var "c"]))
     it "binds :: tighter than ," $
       parseExpr "a :: b, c"
-        `shouldBe` Right (ExprTuple [ExprCons [var "a", var "b"], var "c"])
+        `shouldBe` Right (ExprTuple (ExprCons (fromList [var "a", var "b"])) (var "c") [])
     it "binds constructor application tighter than ::" $
       parseExpr "C a :: b"
         `shouldBe` Right
           ( ExprCons
-              [ ExprNonconstantVariant
-                  { constr = Path Nothing "C",
-                    expr = var "a"
-                  },
-                var "b"
-              ]
+              ( fromList
+                  [ ExprNonconstantVariant
+                      { constr = Path Nothing "C",
+                        expr = var "a"
+                      },
+                    var "b"
+                  ]
+              )
           )
 
   describe "lists and arrays" $ do
     it "parses list literals as a cons chain ending in []" $
-      parseExpr "[a; b]" `shouldBe` Right (ExprCons [var "a", var "b", ExprConstant ConstantList])
+      parseExpr "[a; b]" `shouldBe` Right (ExprCons (fromList [var "a", var "b", ExprConstant ConstantList]))
     it "allows a trailing ; in list literals" $
       parseExpr "[a; b;]" `shouldBe` parseExpr "[a; b]"
     it "parses array literals" $
-      parseExpr "[|a; b|]" `shouldBe` Right (ExprArray [var "a", var "b"])
+      parseExpr "[|a; b|]" `shouldBe` Right (ExprArray (fromList [var "a", var "b"]))
 
   describe "sequences" $ do
     let a = var "a"
@@ -560,15 +599,15 @@ spec = do
       parseExpr "(a; b)" `shouldBe` Right (seqE a b)
       parseExpr "begin a; b end" `shouldBe` Right (seqE a b)
     it "binds every other operator tighter than ;" $
-      parseExpr "a := b; c, a" `shouldBe` Right (seqE (infixE ":=" a b) (ExprTuple [c, a]))
+      parseExpr "a := b; c, a" `shouldBe` Right (seqE (infixE ":=" a b) (ExprTuple c a []))
     it "treats ; in a list as an item separator" $
       parseExpr "[a; b; c]"
-        `shouldBe` Right (ExprCons [a, b, c, ExprConstant ConstantList])
+        `shouldBe` Right (ExprCons (fromList [a, b, c, ExprConstant ConstantList]))
     it "treats ; in an array as an item separator" $
-      parseExpr "[|a; b; c|]" `shouldBe` Right (ExprArray [a, b, c])
+      parseExpr "[|a; b; c|]" `shouldBe` Right (ExprArray (fromList [a, b, c]))
     it "allows a parenthesized sequence as a list item" $
       parseExpr "[(a; b); c]"
-        `shouldBe` Right (ExprCons [seqE a b, c, ExprConstant ConstantList])
+        `shouldBe` Right (ExprCons (fromList [seqE a b, c, ExprConstant ConstantList]))
     it "treats ; in a record as a field separator" $
       parseExpr "{x = a; y = b}"
         `shouldBe` Right
@@ -609,7 +648,7 @@ spec = do
       parseExpr "match x with 1 -> a + b"
         `shouldBe` Right (matchE x [(intPat 1, Nothing, infixE "+" a b)])
       parseExpr "match x with 1 -> a, b"
-        `shouldBe` Right (matchE x [(intPat 1, Nothing, ExprTuple [a, b])])
+        `shouldBe` Right (matchE x [(intPat 1, Nothing, ExprTuple a b [])])
       parseExpr "match x with 1 -> a; b"
         `shouldBe` Right (matchE x [(intPat 1, Nothing, seqE a b)])
     it "lets parentheses end a match" $
@@ -662,7 +701,7 @@ spec = do
     it "parses a return type constraint" $
       parseExpr "fun 1 : _ -> a"
         `shouldBe` Right
-          (ExprLambda {parameters = [ParameterPattern (intPat 1)], typeConstraint = Just TypeExpr, body = a})
+          (ExprLambda {parameters = [ParameterPattern (intPat 1)], typeConstraint = Just TypeExprWildcard, body = a})
     it "extends the body as far as possible" $
       parseExpr "fun 1 -> a; b"
         `shouldBe` Right (lambda [ParameterPattern (intPat 1)] (ExprSequence {left = a, right = b}))
@@ -677,22 +716,22 @@ spec = do
     it "parses labeled parameters" $ do
       parseExpr "fun ~x -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
       parseExpr "fun ~(x) -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing Nothing] a)
-      parseExpr "fun ~(x : _) -> a" `shouldBe` Right (lambda [ParameterLabel "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ~(x : _) -> a" `shouldBe` Right (lambda [ParameterLabel "x" (Just TypeExprWildcard) Nothing] a)
       parseExpr "fun ~x:1 -> a" `shouldBe` Right (lambda [ParameterLabel "x" Nothing (Just (intPat 1))] a)
     it "parses optional parameters" $ do
       parseExpr "fun ?x -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
       parseExpr "fun ?(x) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing Nothing] a)
-      parseExpr "fun ?(x : _) -> a" `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) Nothing] a)
+      parseExpr "fun ?(x : _) -> a" `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) Nothing] a)
       parseExpr "fun ?(x = b) -> a" `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just b)] a)
       parseExpr "fun ?(x : _ = b) -> a"
-        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just b)] a)
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) (Just b)] a)
     it "parses optional parameters with patterns" $ do
       parseExpr "fun ?x:1 -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
       parseExpr "fun ?x:(1) -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing Nothing] a)
       parseExpr "fun ?x:(1 : _ = b) -> a"
-        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just b)] a)
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExprWildcard) (Just b)] a)
     -- each expected tree below matches what `ocamlc -stop-after parsing -dsource` prints
     it "takes a whole sequence as an optional parameter's default" $ do
       let c = var "c"
@@ -701,17 +740,17 @@ spec = do
       parseExpr "fun ?(x = b; c) -> a"
         `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b c))] a)
       parseExpr "fun ?(x : _ = b; c) -> a"
-        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExpr) (Just (seqE b c))] a)
+        `shouldBe` Right (lambda [ParameterOptional "x" (Just TypeExprWildcard) (Just (seqE b c))] a)
       parseExpr "fun ?x:(1 = b; c) -> a"
         `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) Nothing (Just (seqE b c))] a)
       parseExpr "fun ?x:(1 : _ = b; c) -> a"
-        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExpr) (Just (seqE b c))] a)
+        `shouldBe` Right (lambda [ParameterOptionalPattern "x" (intPat 1) (Just TypeExprWildcard) (Just (seqE b c))] a)
       parseExpr "fun ?(x = b; c; d) -> a"
         `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (seqE b (seqE c d)))] a)
     it "takes any expression as an optional parameter's default" $ do
       let c = var "c"
       parseExpr "fun ?(x = b, c) -> a"
-        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (ExprTuple [b, c]))] a)
+        `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (ExprTuple b c []))] a)
       parseExpr "fun ?(x = b := c) -> a"
         `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just (infixE ":=" b c))] a)
       parseExpr "fun ?(x = if b then c) -> a"
@@ -772,8 +811,8 @@ spec = do
     it "allows a trailing ; at the top level" $
       exprsOf "a; ;; b;" `shouldBe` Right [a, b]
     it "allows a trailing ; before a type annotation" $ do
-      parseExpr "(a; : _)" `shouldBe` Right (ExprAnnotated {expr = a, typeExpr = TypeExpr})
-      parseExpr "(a; b : _)" `shouldBe` Right (ExprAnnotated {expr = seqE a b, typeExpr = TypeExpr})
+      parseExpr "(a; : _)" `shouldBe` Right (ExprAnnotated {expr = a, typeExpr = TypeExprWildcard})
+      parseExpr "(a; b : _)" `shouldBe` Right (ExprAnnotated {expr = seqE a b, typeExpr = TypeExprWildcard})
     it "allows a trailing ; in conditions and loops" $ do
       parseExpr "if a; then b" `shouldBe` Right (ExprIf {cond = a, thenExpr = b, elseExpr = Nothing})
       parseExpr "while a; do b; done" `shouldBe` Right (ExprWhile {cond = a, body = b})
@@ -796,8 +835,8 @@ spec = do
       parseExpr "(fun 1 -> a;)" `shouldBe` Right (lambda [ParameterPattern (intPat 1)] a)
       parseExpr "fun ?(x = a;) -> c" `shouldBe` Right (lambda [ParameterOptional "x" Nothing (Just a)] c)
     it "still treats a trailing ; in lists, arrays and records as a separator" $ do
-      parseExpr "[a; b;]" `shouldBe` Right (ExprCons [a, b, ExprConstant ConstantList])
-      parseExpr "[|a; b;|]" `shouldBe` Right (ExprArray [a, b])
+      parseExpr "[a; b;]" `shouldBe` Right (ExprCons (fromList [a, b, ExprConstant ConstantList]))
+      parseExpr "[|a; b;|]" `shouldBe` Right (ExprArray (fromList [a, b]))
       parseExpr "{x = a;}"
         `shouldBe` Right (ExprRecord {source = Nothing, fields = [RecordField (Path Nothing "x") Nothing a]})
     it "rejects more than one trailing ;" $ do
@@ -812,42 +851,58 @@ spec = do
     it "uses nested constructor patterns in function cases" $
       parseExpr "function Some Some x -> x | None -> fallback"
         `shouldBe` Right
-          (ExprFunction {cases =
-            [ (PatternVariant (con "Some") (PatternVariant (con "Some") (PatternVariable "x")), Nothing, var "x"),
-              (simpleCon "None", Nothing, var "fallback")
-            ]})
+          ( ExprFunction
+              { cases =
+                  [ (PatternVariant (con "Some") (PatternVariant (con "Some") (PatternVariable "x")), Nothing, var "x"),
+                    (simpleCon "None", Nothing, var "fallback")
+                  ]
+              }
+          )
     it "distinguishes or-patterns from case separators" $
       parseExpr "match x with A | B -> left | C -> right"
         `shouldBe` Right
-          (ExprMatch {expr = var "x", cases =
-            [ (PatternOr (simpleCon "A") (simpleCon "B"), Nothing, var "left"),
-              (simpleCon "C", Nothing, var "right")
-            ]})
+          ( ExprMatch
+              { expr = var "x",
+                cases =
+                  [ (PatternOr (simpleCon "A") (simpleCon "B"), Nothing, var "left"),
+                    (simpleCon "C", Nothing, var "right")
+                  ]
+              }
+          )
     it "parses collection patterns in match cases" $
       parseExpr "match xs with x :: rest -> x | [] -> empty"
         `shouldBe` Right
-          (ExprMatch {expr = var "xs", cases =
-            [ (PatternCons (PatternVariable "x") (PatternVariable "rest"), Nothing, var "x"),
-              (PatternList [], Nothing, var "empty")
-            ]})
+          ( ExprMatch
+              { expr = var "xs",
+                cases =
+                  [ (PatternCons (PatternVariable "x") (PatternVariable "rest"), Nothing, var "x"),
+                    (PatternList [], Nothing, var "empty")
+                  ]
+              }
+          )
     it "parses constructed exception handlers" $
       parseExpr "try e with Failure msg -> msg | _ -> e"
         `shouldBe` Right
-          (ExprTry {expr = var "e", cases =
-            [ (PatternVariant (con "Failure") (PatternVariable "msg"), Nothing, var "msg"),
-              (PatternWildcard, Nothing, var "e")
-            ]})
+          ( ExprTry
+              { expr = var "e",
+                cases =
+                  [ (PatternVariant (con "Failure") (PatternVariable "msg"), Nothing, var "msg"),
+                    (PatternWildcard, Nothing, var "e")
+                  ]
+              }
+          )
     it "keeps constructor patterns and later lambda parameters distinct" $
       parseExpr "fun Some x y -> y"
         `shouldBe` Right
-          (ExprLambda
-            { parameters =
-                [ ParameterPattern (PatternVariant (con "Some") (PatternVariable "x")),
-                  ParameterPattern (PatternVariable "y")
-                ],
-              typeConstraint = Nothing,
-              body = var "y"
-            })
+          ( ExprLambda
+              { parameters =
+                  [ ParameterPattern (PatternVariant (con "Some") (PatternVariable "x")),
+                    ParameterPattern (PatternVariable "y")
+                  ],
+                typeConstraint = Nothing,
+                body = var "y"
+              }
+          )
     it "preserves labeled and optional parameter types and defaults" $ do
       parseExpr "fun ~x:(Some y) -> y"
         `shouldBe` Right
@@ -868,18 +923,20 @@ spec = do
 
   describe "type annotations" $ do
     it "parses the _ placeholder type" $
-      parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExpr})
+      parseExpr "(x : _)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeExprWildcard})
     it "parses named type annotations" $
       parseExpr "(x : t)" `shouldBe` Right (ExprAnnotated {expr = var "x", typeExpr = TypeName (ExtendedPath Nothing "t")})
     it "parses polymorphic function annotations" $
       parseExpr "(x : 'a list -> bool)"
         `shouldBe` Right
-          (ExprAnnotated
-            { expr = var "x",
-              typeExpr = TypeArrow
-                (TypeApplication [TypeVariable "a"] (ExtendedPath Nothing "list"))
-                (TypeName (ExtendedPath Nothing "bool"))
-            })
+          ( ExprAnnotated
+              { expr = var "x",
+                typeExpr =
+                  TypeArrow
+                    (TypeApplication [TypeVariable "a"] (ExtendedPath Nothing "list"))
+                    (TypeName (ExtendedPath Nothing "bool"))
+              }
+          )
   where
     isLeft (Left _) = True
     isLeft _ = False

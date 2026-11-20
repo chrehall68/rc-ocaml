@@ -139,6 +139,7 @@ test-suite intermediate-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+    TypeAnnotatorSpec
     TypeSpec
 
   build-depends:
@@ -146,6 +147,7 @@ test-suite intermediate-test
     containers,
     hspec,
     mtl,
+    rc-ocaml:frontend,
     rc-ocaml:intermediate,
 
   build-tool-depends:
