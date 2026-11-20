@@ -8,6 +8,7 @@ import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
 import Data.Maybe (fromMaybe)
 import qualified Frontend.Ast as Ast
+import Intermediate.SymbolTable (envFreeVars)
 import qualified Intermediate.SymbolTable as SymTab
 import Intermediate.Type
 import Intermediate.TypedAst
@@ -182,7 +183,9 @@ lowerExpr expr =
     Ast.ExprPath p -> do
       -- look up where this value comes from
       symtab <- gets symbolTable
-      tp <- liftEither $ SymTab.resolveValue symtab p
+      scheme <- liftEither $ SymTab.resolveValue symtab p
+      -- polymorphic values get fresh type variables at each use
+      tp <- liftTypes $ instantiate scheme
       return $ TEVar tp p
     Ast.ExprNonconstantVariant {Ast.constr = constr, Ast.expr = expr} -> do
       symtab <- gets symbolTable
@@ -250,7 +253,8 @@ lowerExpr expr =
     -- TODO: Prefix
     Ast.ExprInfix op left right -> do
       symtab <- gets symbolTable
-      opType <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
+      opScheme <- liftEither $ SymTab.resolveValue symtab (Ast.Path Nothing op)
+      opType <- liftTypes $ instantiate opScheme
       typedLeft <- lowerExpr left
       typedRight <- lowerExpr right
       -- then need to unify op with leftType -> rightType -> a
@@ -351,6 +355,21 @@ lowerExpr expr =
           Nothing -> return ()
         return typedBody
     _ -> throwError "Not implemented"
+
+-- whether evaluating the expression can't have effects (so it's safe to generalize its type)
+-- conservative: when unsure, say no (e.g. arrays and records could be mutable)
+isNonExpansive :: TExpr t -> Bool
+isNonExpansive expr =
+  case expr of
+    TEConstant _ _ -> True
+    TEVar _ _ -> True
+    TEVariant _ _ e -> isNonExpansive e
+    TEPolymorphicVariant _ _ e -> isNonExpansive e
+    TETuple _ a b rest -> all isNonExpansive (a : b : rest)
+    TECons _ a b -> isNonExpansive a && isNonExpansive b
+    -- a function is a value no matter what its body does
+    TEFunction {} -> True
+    _ -> False
 
 -- lowers `fun p1 p2 -> body` into nested one-argument functions
 -- each parameter gets its own scope, so later parameters (and the body) see earlier ones
@@ -561,9 +580,17 @@ lowerAndInsertBindings isRec letBindings = do
         Ast.LetBindingPattern pat expr -> withScopeRestore False $ do
           -- need to evaluate expression first
           typedExpr <- lowerExpr expr
+          -- environment has to be measured before inserting the pattern
+          envVars <- gets symbolTable >>= liftTypes . envFreeVars
           -- then can lower / insert the pattern
           typedPat <- lowerAndInsertPattern pat
           unifyOrRollback (patternAnnotation typedPat) (exprAnnotation typedExpr)
+          -- the current scope holds exactly the variables this pattern bound
+          -- apply same restriction here as in regular let bindings
+          when (isNonExpansive typedExpr) $ do
+            symtab <- gets symbolTable
+            generalized <- liftTypes $ SymTab.generalizeCurrentScope envVars symtab
+            modify (\s -> s {symbolTable = generalized})
           return $ [TLetBinding typedPat typedExpr]
         Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = typeExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
           -- with parameters, this is sugar for `let f = fun params : t -> e`,
@@ -576,7 +603,7 @@ lowerAndInsertBindings isRec letBindings = do
           let exprType = exprAnnotation typedExpr
           -- then just create and bind the type variable for our name
           tVar <- liftTypes newTypeVar
-          liftTypes $ bindTypeVar tVar exprType
+          unifyOrRollback (TVar tVar) exprType
           let tp = TVar tVar
           -- but also it should conform to our typeExpr
           unifyWith <- case bindingType of
@@ -584,5 +611,13 @@ lowerAndInsertBindings isRec letBindings = do
             Nothing -> return tp
           unifyOrRollback unifyWith tp
           -- now everything checked out, so put it into our symbol table and return it
-          modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp})
+          -- value restriction: only generalize if the right-hand side is a syntactic value
+          -- (otherwise its type variables stay shared, like ocaml's weak '_a)
+          symtab <- gets symbolTable
+          if isNonExpansive typedExpr
+            then do
+              envVars <- liftTypes $ envFreeVars symtab
+              scheme <- liftTypes $ generalize tp envVars
+              modify (\s -> s {symbolTable = SymTab.insertScheme (symbolTable s) (Ast.Path Nothing name) scheme})
+            else modify (\s -> s {symbolTable = SymTab.insertValue (symbolTable s) (Ast.Path Nothing name) tp})
           return $ [TLetBinding (TPVariable tp name) (typedExpr)]

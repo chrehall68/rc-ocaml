@@ -6,6 +6,9 @@ module Intermediate.SymbolTable
     resolveValue,
     resolveValueInLast,
     insertValue,
+    insertScheme,
+    envFreeVars,
+    generalizeCurrentScope,
     resolveType,
     insertType,
     resolveConstructor,
@@ -18,8 +21,9 @@ module Intermediate.SymbolTable
 where
 
 import qualified Data.Map
+import qualified Data.Set
 import Frontend.Ast (Path (..))
-import Intermediate.Type (ArgLabel (..), Type (..), TypeVar (..))
+import Intermediate.Type (ArgLabel (..), Type (..), TypeScheme (..), TypeVar (..), TypeVarM, freeTypeVars, generalize)
 
 -- what we know about a variant constructor, e.g. for
 -- type 'a option = None | Some of 'a
@@ -50,7 +54,7 @@ data FieldInfo = FieldInfo
 -- won't have same names as constructors though bc those are forced to be
 -- uppercase
 data Scope = Scope
-  { values :: Data.Map.Map String Type,
+  { values :: Data.Map.Map String TypeScheme,
     types :: Data.Map.Map String Type,
     constructors :: Data.Map.Map String ConstructorInfo,
     fields :: Data.Map.Map String FieldInfo
@@ -64,6 +68,17 @@ type SymbolTable = [Scope]
 emptyScope :: Scope
 emptyScope = Scope {values = Data.Map.empty, constructors = Data.Map.empty, fields = Data.Map.empty, types = Data.Map.empty}
 
+monomorphic :: Type -> TypeScheme
+monomorphic = Forall Data.Set.empty
+
+-- builtins that work at any type; the type variables are instantiated at each use
+polymorphicValues :: Data.Map.Map String TypeScheme
+polymorphicValues =
+  let a = TypeVar (-1)
+   in Data.Map.fromList
+        [ ("<", Forall (Data.Set.singleton a) (TArrow NoLabel (TVar a) (TArrow NoLabel (TVar a) TBool)))
+        ]
+
 -- predefined identifiers / constructs
 -- TODO: maybe this should be dependency injected since
 -- the converter will also need to know what's predefined...
@@ -71,7 +86,9 @@ initialScope :: Scope
 initialScope =
   Scope
     { values =
-        Data.Map.fromList
+        Data.Map.union polymorphicValues $
+          Data.Map.map monomorphic $
+            Data.Map.fromList
           [ -- create strings
             ("string_of_int", TArrow NoLabel TInt TString),
             ("string_of_bool", TArrow NoLabel TBool TString),
@@ -96,18 +113,7 @@ initialScope =
             ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
             ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
             ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
-            -- TODO: this should probably be polymorphic
-            ( "<",
-              TArrow
-                NoLabel
-                (TVar (TypeVar (-1)))
-                ( TArrow
-                    NoLabel
-                    (TVar (TypeVar (-2)))
-                    TBool
-                )
-            )
+            ("/.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat))
           ],
       constructors = Data.Map.empty,
       fields = Data.Map.empty,
@@ -143,14 +149,42 @@ insertIn namespace setNamespace table symbol value = case table of
     symbolName = pathToString symbol
 
 -- value operations
-resolveValue :: SymbolTable -> Path -> Either String Type
+resolveValue :: SymbolTable -> Path -> Either String TypeScheme
 resolveValue = resolveIn values "value"
 
-resolveValueInLast :: SymbolTable -> Path -> Either String Type
+resolveValueInLast :: SymbolTable -> Path -> Either String TypeScheme
 resolveValueInLast tab = resolveIn values "value" [head tab]
 
+-- binds a name monomorphically (lambda parameters, pattern variables, ...)
 insertValue :: SymbolTable -> Path -> Type -> SymbolTable
-insertValue = insertIn values (\scope m -> scope {values = m})
+insertValue table path tp = insertScheme table path (monomorphic tp)
+
+insertScheme :: SymbolTable -> Path -> TypeScheme -> SymbolTable
+insertScheme = insertIn values (\scope m -> scope {values = m})
+
+-- generalizes every value bound in the innermost scope, leaving out the given type variables
+-- (the ones the surrounding environment still depends on)
+generalizeCurrentScope :: Data.Set.Set TypeVar -> SymbolTable -> TypeVarM SymbolTable
+generalizeCurrentScope _ [] = error "Bad use of symbol table; generalizing no scopes"
+generalizeCurrentScope envVars (current : outer) = do
+  generalized <- mapM generalizeScheme (values current)
+  return $ current {values = generalized} : outer
+  where
+    -- already-polymorphic values have nothing more to generalize
+    generalizeScheme scheme@(Forall quantified tp)
+      | Data.Set.null quantified = generalize tp envVars
+      | otherwise = return scheme
+
+-- the unbound type variables that values in scope still depend on
+-- these must not be generalized, since something else could still bind them
+-- (variables a scheme quantifies over don't count; they get fresh copies at each use)
+envFreeVars :: SymbolTable -> TypeVarM (Data.Set.Set TypeVar)
+envFreeVars table = do
+  perScheme <- mapM schemeFreeVars (concatMap (Data.Map.elems . values) table)
+  return $ Data.Set.unions perScheme
+  where
+    schemeFreeVars (Forall quantified tp) =
+      (`Data.Set.difference` quantified) <$> freeTypeVars tp
 
 -- value operations
 resolveType :: SymbolTable -> Path -> Either String Type

@@ -205,3 +205,42 @@ spec = do
       typeOf "r" "let f ?(x = 1) () = x\nlet r = f ()" `shouldBe` Right TInt
     it "rejects wrong argument types" $
       infer "let f x = x + 1\nlet r = f \"a\"" `shouldSatisfy` isLeft'
+
+  describe "let-polymorphism" $ do
+    it "lets an identity function be used at two types" $
+      typeOf "r" "let id x = x\nlet a = id 1\nlet r = (a, id \"s\")"
+        `shouldBe` Right (TTuple [TInt, TString])
+    it "gives a polymorphic function distinct type variables per use" $
+      typeOf "r" "let pair x = (x, x)\nlet r = (pair 1, pair true)"
+        `shouldBe` Right (TTuple [TTuple [TInt, TInt], TTuple [TBool, TBool]])
+    it "keeps lambda parameters monomorphic" $
+      infer "let h f = (f 1, f true)" `shouldSatisfy` isLeft'
+    it "generalizes local functions" $
+      typeOf "r" "let r = let id x = x in (id 1, id true)"
+        `shouldBe` Right (TTuple [TInt, TBool])
+    it "does not generalize variables of an enclosing parameter" $ do
+      -- g : 'b -> 'a * 'b, but 'a belongs to x
+      typeOf "r" "let f x = let g y = (x, y) in (g 1, g true)\nlet r = f 5"
+        `shouldBe` Right (TTuple [TTuple [TInt, TInt], TTuple [TInt, TBool]])
+      -- x can't be both an int and a string through g
+      infer "let f x = let g y = x in (g 1) + 1 + (if g true then 1 else 2)" `shouldSatisfy` isLeft'
+    it "applies a polymorphic builtin comparison at several types" $
+      typeOf "r" "let r = (1 < 2, \"a\" < \"b\")" `shouldBe` Right (TTuple [TBool, TBool])
+    it "does not generalize an expansive right-hand side" $ do
+      -- id id is an application, so f stays weakly typed
+      typeOf "r" "let id x = x\nlet f = id id\nlet r = f 1" `shouldBe` Right TInt
+      infer "let id x = x\nlet f = id id\nlet a = f 1\nlet b = f \"s\"" `shouldSatisfy` isLeft'
+
+  describe "let-polymorphism with patterns" $ do
+    it "generalizes variables bound by a pattern of values" $
+      typeOf "r" "let (f, g) = ((fun x -> x), (fun y -> y))\nlet r = (f 1, f true, g \"s\")"
+        `shouldBe` Right (TTuple [TInt, TBool, TString])
+    it "does not generalize a pattern whose right-hand side is expansive" $ do
+      let src = "let id x = x\nlet (a, b) = (id id, 2)\n"
+      typeOf "r" (src ++ "let r = a 1") `shouldBe` Right TInt
+      infer (src ++ "let x = a 1\nlet y = a true") `shouldSatisfy` isLeft'
+    it "does not generalize variables an enclosing parameter depends on" $
+      typeOf "r" "let f x = let (a, b) = (x, 1) in (a, b)\nlet r = f true"
+        `shouldBe` Right (TTuple [TBool, TInt])
+    it "keeps pattern variables tied to a parameter's type" $
+      infer "let f x = let (a, _) = (x, 1) in (a + 1, if a then 1 else 2)" `shouldSatisfy` isLeft'

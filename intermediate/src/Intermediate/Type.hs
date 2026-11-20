@@ -1,4 +1,4 @@
-module Intermediate.Type where
+module Intermediate.Type (TypeVar (..), ArgLabel (..), Type (..), TypeVarState (..), TypeVarM, TypeScheme (..), initialTypeVarState, newTypeVar, bindTypeVar, prune, unify, resolveType, freeTypeVars, generalize, instantiate) where
 
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, throwError)
@@ -6,13 +6,14 @@ import Control.Monad.State (State, evalState, gets, modify)
 import Control.Monad.Trans
 import qualified Data.Map
 import Data.Maybe (isNothing)
+import qualified Data.Set
 
 -- id is a unique identifier for a typevar
 -- thus same id -> same type variable
 -- what a type var is bound to lives
 -- in the substitution map in TypeVarState
 newtype TypeVar = TypeVar {typeVarId :: Int}
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 -- how an argument is passed to a function
 data ArgLabel
@@ -49,6 +50,10 @@ data TypeVarState = TypeVarState
   }
 
 type TypeVarM = State TypeVarState
+
+-- a type scheme (unconstrained, expr) is polymorphic over all instantiations
+-- of the types in unconstrained
+data TypeScheme = Forall (Data.Set.Set TypeVar) Type
 
 initialTypeVarState :: TypeVarState
 initialTypeVarState = TypeVarState {lastUsedTypeId = 0, substitutions = Data.Map.empty}
@@ -172,3 +177,66 @@ checkNotRecursive tVar t = do
         then
           throwError $ "Infinite type. The type variable " ++ (show tVar) ++ " appears inside the expression it would bind to"
         else return ()
+
+-- see page 394 in compilers book for polymorphic functions
+-- basically we just need to find any unbound variables and generalize them
+-- find unconstrained type variables in the current context
+freeTypeVars :: Type -> TypeVarM (Data.Set.Set TypeVar)
+freeTypeVars tp = do
+  pruned <- prune tp
+  case pruned of
+    TUnit -> return Data.Set.empty
+    TInt -> return Data.Set.empty
+    TBool -> return Data.Set.empty
+    TFloat -> return Data.Set.empty
+    TChar -> return Data.Set.empty
+    TString -> return Data.Set.empty
+    TArrow _ lhs rhs -> Data.Set.union <$> freeTypeVars lhs <*> freeTypeVars rhs
+    TTuple types -> do
+      freeVars <- mapM freeTypeVars types
+      return $ foldl Data.Set.union Data.Set.empty freeVars
+    TCon _ types -> do
+      freeVars <- mapM freeTypeVars types
+      return $ foldl Data.Set.union Data.Set.empty freeVars
+    TVar var ->
+      -- we know that we already pruned, so the fact that we have
+      -- a variable here implies that it is unbound
+      return $ Data.Set.singleton var
+
+-- take a type and generalize all for sure unconstrained variables
+-- unlike in the textbook where all functions are done first, we have an
+-- environment with variables, so we need to subtract those
+generalize :: Type -> Data.Set.Set TypeVar -> TypeVarM TypeScheme
+generalize tp environmentVars = do
+  freeVars <- freeTypeVars tp
+  let trulyFree = Data.Set.difference freeVars environmentVars
+  return $ Forall trulyFree tp
+
+replaceTypes :: Data.Map.Map TypeVar TypeVar -> Type -> TypeVarM Type
+replaceTypes replacements tp = do
+  pruned <- prune tp
+  case pruned of
+    TUnit -> return TUnit
+    TInt -> return TInt
+    TBool -> return TBool
+    TFloat -> return TFloat
+    TChar -> return TChar
+    TString -> return TString
+    TArrow arg lhs rhs -> TArrow arg <$> replaceTypes replacements lhs <*> replaceTypes replacements rhs
+    TTuple types -> do
+      TTuple <$> mapM (replaceTypes replacements) types
+    TCon name types -> do
+      TCon name <$> mapM (replaceTypes replacements) types
+    TVar var ->
+      case Data.Map.lookup var replacements of
+        Just replacement -> return $ TVar replacement
+        Nothing -> return $ TVar var
+
+-- use this ie when encountering an application of a polymorphic function
+instantiate :: TypeScheme -> TypeVarM Type
+instantiate (Forall unconstrained tp) = do
+  let unconstrainedList = Data.Set.toList unconstrained
+  freshVars <- mapM (\_ -> newTypeVar) unconstrainedList
+  let replacements = zip unconstrainedList freshVars
+  let replacementMap = Data.Map.fromList replacements
+  replaceTypes replacementMap tp
