@@ -307,26 +307,34 @@ spec = do
       let src = "type 'a mylist = Nil | Cons of 'a * 'a mylist\n"
       typeOf "r" (src ++ "let r = Cons (1, Cons (2, Nil))") `shouldBe` Right (TCon "mylist" [TInt])
       infer (src ++ "let r = Cons (1, Cons (\"a\", Nil))") `shouldSatisfy` isLeft'
+    it "defines mutually recursive types" $ do
+      let src = "type tree = Node of int * forest and forest = Empty | More of tree * forest\n"
+      typeOf "r" (src ++ "let r = Node (1, More (Node (2, Empty), Empty))") `shouldBe` Right (TCon "tree" [])
+    it "lets a variant refer to an alias in its group" $
+      typeOf "r" "type t = A of u and u = int\nlet r = A 1" `shouldBe` Right (TCon "t" [])
     it "does not let nonrec types refer to themselves" $
       infer "type nonrec t = A of t" `shouldSatisfy` isLeft'
     it "rejects wrong arguments to a recursive type" $
       infer "type 'a t = Leaf | Node of 'a t * 'a * 'a t\nlet r : int t = Node (Leaf, \"s\", Leaf)"
         `shouldSatisfy` isLeft'
 
-  describe "let rec" $ do
+  describe "let rec and and" $ do
     it "types a recursive function" $
       typeOf "fact" "let rec fact n = if n < 1 then 1 else n * fact (n - 1)"
         `shouldBe` Right (TArrow NoLabel TInt TInt)
     it "generalizes a recursive function" $
       typeOf "r" "let rec len l = match l with | [] -> 0 | _ :: t -> 1 + len t\nlet r = (len [1], len [true])"
         `shouldBe` Right (TTuple [TInt, TInt])
+    it "types mutually recursive functions" $
+      typeOf "r" "let rec even n = if n < 1 then true else odd (n - 1) and odd n = if n < 1 then false else even (n - 1)\nlet r = even 4"
+        `shouldBe` Right TBool
     it "keeps a recursive function monomorphic inside its own body" $
       infer "let rec f x = (f 1, f true)" `shouldSatisfy` isLeft'
     it "rejects a non-variable pattern in let rec" $
       infer "let rec (a, b) = (1, 2)" `shouldSatisfy` isLeft'
+    it "evaluates all right-hand sides outside the new names for let ... and" $ do
+      typeOf "r" "let a = 1\nlet a = \"s\" and b = a\nlet r = b" `shouldBe` Right TInt
+    it "rejects binding a name twice in one let ... and" $
+      infer "let a = 1 and a = 2" `shouldSatisfy` isLeft'
     it "supports local let rec" $
       typeOf "r" "let r = let rec f n = if n < 1 then 0 else f (n - 1) in f 3" `shouldBe` Right TInt
-    it "does not support let ... and yet" $
-      infer "let a = 1 and b = 2" `shouldSatisfy` isLeft'
-    it "does not support type ... and yet" $
-      infer "type t = A of u and u = B" `shouldSatisfy` isLeft'

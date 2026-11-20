@@ -4,7 +4,7 @@ import Control.Monad (forM, forM_, when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
-import Data.List ((\\))
+import Data.List (partition, (\\))
 import Data.Foldable (foldrM)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
@@ -575,45 +575,55 @@ lowerDefinition def =
       loweredBindings <- lowerAndInsertBindings isRec letBindings
       return $ TDefinitionLet isRec loweredBindings
     Ast.DefinitionType definition@(Ast.TypeDefinition isNonrec typedefs) -> do
-      case typedefs of
-        [] -> error "impossible"
-        _t1 : _t2 : _ -> throwError "multiple typedefs not implemented yet"
-        td : [] -> lowerTypeDefinition isNonrec td
+      lowerTypeDefinitions isNonrec typedefs
       return $ TDefinitionType definition
 
--- unless nonrec, the type can refer to itself
-lowerTypeDefinition :: Bool -> Ast.TypeDef -> LowerAndInferM ()
-lowerTypeDefinition isNonrec td = do
-  let name = Ast.typedefName td
-      paramNames = Ast.typedefParams td
-  when (not (null (Ast.typedefConstraints td))) $ throwError "constraints not supported yet"
-  when (length paramNames /= length (Data.Set.fromList paramNames)) $
-    throwError $ "type " ++ name ++ " has a repeated type parameter"
+-- lowers a group of type definitions (`type a = ... and b = ...`)
+-- unless nonrec, the types can refer to themselves and to each other
+-- (a type alias in a recursive group can only refer to variant types, or to aliases defined before it)
+lowerTypeDefinitions :: Bool -> [Ast.TypeDef] -> LowerAndInferM ()
+lowerTypeDefinitions isNonrec typedefs = do
+  when (null typedefs) $ error "impossible"
   -- each parameter is a type variable, which 'a in the body refers to
-  vars <- mapM (const $ liftTypes newTypeVar) paramNames
-  let tp = TCon name (map TVar vars)
-      isAlias = case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
+  prepared <- forM typedefs $ \td -> do
+    when (not (null (Ast.typedefConstraints td))) $ throwError "constraints not supported yet"
+    let paramNames = Ast.typedefParams td
+    when (length paramNames /= length (Data.Set.fromList paramNames)) $
+      throwError $ "type " ++ Ast.typedefName td ++ " has a repeated type parameter"
+    paramVars <- mapM (const $ liftTypes newTypeVar) paramNames
+    return (td, paramVars)
+  let isAlias (td, _) = case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
         (Just _, Nothing) -> True
         _ -> False
-  -- a recursive type is its own distinct type, so it can be referred to
-  -- before its body is lowered (an alias can't, since that would be cyclic)
-  when (not isNonrec && not isAlias) $ registerType name (SymTab.TypeInfo vars tp)
-  body <- withTypeParams td vars $ case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
-    (Nothing, Nothing) ->
-      -- empty type, nothing to do
-      return tp
-    (Just eq, Nothing) ->
-      -- acts as a type alias
-      lowerTypeExpr eq
-    (Nothing, Just (Ast.TypeVariant constructors)) -> do
-      forM_ constructors $ \(Ast.ConstrDecl constrName typeExprs) -> do
-        desiredTypes <- mapM lowerTypeExpr typeExprs
-        let info = SymTab.ConstructorInfo {SymTab.constructorParams = vars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = tp}
-        modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing constrName) info})
-      return tp
-    (Nothing, Just (Ast.TypeRecord _fields)) -> throwError "todo"
-    _ -> throwError "re-exporting types not supported yet"
-  registerType name (SymTab.TypeInfo vars body)
+      (aliases, nominals) = partition isAlias prepared
+  -- every type that isn't an alias is its own distinct type,
+  -- so in a recursive group it can be referred to before its body is lowered
+  when (not isNonrec) $
+    forM_ nominals $ \(td, vars) -> registerType (Ast.typedefName td) (nominalInfo td vars)
+  -- aliases first, so the variants can use them
+  aliasInfos <- forM aliases $ \(td, vars) -> do
+    body <- withTypeParams td vars $ case Ast.typedefEquation td of
+      Just eq -> lowerTypeExpr eq
+      Nothing -> error "impossible"
+    let info = SymTab.TypeInfo vars body
+    when (not isNonrec) $ registerType (Ast.typedefName td) info
+    return (Ast.typedefName td, info)
+  nominalInfos <- forM nominals $ \(td, vars) -> do
+    withTypeParams td vars $ case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
+      (Nothing, Nothing) -> return ()
+      (Nothing, Just (Ast.TypeVariant constructors)) ->
+        forM_ constructors $ \(Ast.ConstrDecl constrName typeExprs) -> do
+          desiredTypes <- mapM lowerTypeExpr typeExprs
+          let info = SymTab.ConstructorInfo {SymTab.constructorParams = vars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = nominalType td vars}
+          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing constrName) info})
+      (Nothing, Just (Ast.TypeRecord _fields)) -> throwError "todo"
+      _ -> throwError "re-exporting types not supported yet"
+    return (Ast.typedefName td, nominalInfo td vars)
+  -- for nonrec, the new names only become visible now
+  forM_ (aliasInfos ++ nominalInfos) $ \(name, info) -> registerType name info
+  where
+    nominalType td vars = TCon (Ast.typedefName td) (map TVar vars)
+    nominalInfo td vars = SymTab.TypeInfo vars (nominalType td vars)
 
 -- runs an action where 'a in type expressions refers to the type's parameters
 -- the body can only mention the declared parameters
@@ -645,57 +655,64 @@ bindMonomorphic name tp = do
 data BindingTarget = BindName String | BindPattern Ast.Pattern
 
 -- in the process of lowering the bindings, also inserts the bindings into the symbol table
--- in a recursive binding the name is visible (monomorphically) to its own right-hand side
--- afterwards the names are generalized (if the right-hand side is a value)
+-- all the bindings of one `let ... and ...` are lowered together:
+--   - every right-hand side is lowered before any name is bound (unless the group is recursive,
+--     in which case every name is visible to every right-hand side, monomorphically)
+--   - then the names are generalized (if their right-hand sides are values)
 lowerAndInsertBindings :: Bool -> [Ast.LetBinding] -> LowerAndInferM [TLetBinding Type]
-lowerAndInsertBindings isRec letBindings =
-  case letBindings of
-    [] -> error "impossible"
-    _b1 : _b2 : _ -> throwError "Multiple bindings not implemented yet"
-    binding : [] -> withScopeRestore False $ do
-      let (target, valueExpr, annotation) = prepareBinding binding
-      -- a recursive name is visible while lowering the right-hand side
-      recVar <- case target of
-        BindName name | isRec -> do
-          var <- liftTypes newTypeVar
-          bindMonomorphic name (TVar var)
-          return $ Just var
-        BindPattern _ | isRec -> throwError "only variables are allowed as the left-hand side of let rec"
-        _ -> return Nothing
-      typedExpr <- lowerExpr valueExpr
-      let exprType = exprAnnotation typedExpr
-      namesBefore <- gets (SymTab.currentScopeNames . symbolTable)
-      (typedPat, names) <- case target of
-        BindName name -> do
-          tp <- case recVar of
-            Just var -> do
-              unifyOrRollback (TVar var) exprType
-              return $ TVar var
-            Nothing -> do
-              var <- liftTypes newTypeVar
-              unifyOrRollback (TVar var) exprType
-              bindMonomorphic name (TVar var)
-              return $ TVar var
-          -- it should also conform to our type annotation
-          forM_ annotation $ \tpExpr -> do
-            desired <- lowerTypeExpr tpExpr
-            unifyOrRollback desired tp
-          return (TPVariable tp name, [name])
-        BindPattern pat -> do
-          typedPat <- lowerAndInsertPattern pat
-          unifyOrRollback (patternAnnotation typedPat) exprType
-          -- the pattern bound everything new in the current scope
-          namesAfter <- gets (SymTab.currentScopeNames . symbolTable)
-          return (typedPat, namesAfter \\ namesBefore)
-      -- value restriction: only generalize if the right-hand side is a syntactic value
-      -- (otherwise its type variables stay shared, like ocaml's weak '_a)
-      when (isNonExpansive typedExpr) $ do
-        symtab <- gets symbolTable
-        -- generalize against everything outside this binding
-        outerVars <- liftTypes $ envFreeVars (SymTab.popScope symtab)
-        generalized <- liftTypes $ SymTab.generalizeNames outerVars names symtab
-        modify (\s -> s {symbolTable = generalized})
-      return [TLetBinding typedPat typedExpr]
+lowerAndInsertBindings isRec letBindings = withScopeRestore False $ do
+  when (null letBindings) $ error "impossible"
+  let prepared = map prepareBinding letBindings
+  -- recursive names are visible while lowering all the right-hand sides
+  recVars <- forM prepared $ \(target, _, _) ->
+    case target of
+      BindName name | isRec -> do
+        var <- liftTypes newTypeVar
+        bindMonomorphic name (TVar var)
+        return $ Just var
+      BindPattern _ | isRec -> throwError "only variables are allowed as the left-hand side of let rec"
+      _ -> return Nothing
+  typedExprs <- mapM (\(_, valueExpr, _) -> lowerExpr valueExpr) prepared
+  -- now bind everything
+  results <- forM (zip3 prepared typedExprs recVars) $ \((target, _, annotation), typedExpr, recVar) -> do
+    let exprType = exprAnnotation typedExpr
+    namesBefore <- gets (SymTab.currentScopeNames . symbolTable)
+    (typedPat, names) <- case target of
+      BindName name -> do
+        tp <- case recVar of
+          Just var -> do
+            unifyOrRollback (TVar var) exprType
+            return $ TVar var
+          Nothing -> do
+            var <- liftTypes newTypeVar
+            unifyOrRollback (TVar var) exprType
+            bindMonomorphic name (TVar var)
+            return $ TVar var
+        -- it should also conform to our type annotation
+        forM_ annotation $ \tpExpr -> do
+          desired <- lowerTypeExpr tpExpr
+          unifyOrRollback desired tp
+        return (TPVariable tp name, [name])
+      BindPattern pat -> do
+        typedPat <- lowerAndInsertPattern pat
+        unifyOrRollback (patternAnnotation typedPat) exprType
+        -- the pattern bound everything new in the current scope
+        namesAfter <- gets (SymTab.currentScopeNames . symbolTable)
+        return (typedPat, namesAfter \\ namesBefore)
+    return (TLetBinding typedPat typedExpr, names, isNonExpansive typedExpr)
+  -- generalize against everything outside this group
+  symtab <- gets symbolTable
+  outerVars <- liftTypes $ envFreeVars (SymTab.popScope symtab)
+  -- value restriction: names whose right-hand side isn't a value stay monomorphic,
+  -- and so do any type variables they share with the others
+  let (generalizable, restricted) = partition (\(_, _, isValue) -> isValue) results
+  restrictedVars <- fmap Data.Set.unions $ forM (concatMap (\(_, names, _) -> names) restricted) $ \name -> do
+    scheme <- liftEither $ SymTab.resolveValueInLast symtab (Ast.Path Nothing name)
+    case scheme of
+      Forall _ tp -> liftTypes $ freeTypeVars tp
+  generalized <- liftTypes $ SymTab.generalizeNames (Data.Set.union outerVars restrictedVars) (concatMap (\(_, names, _) -> names) generalizable) symtab
+  modify (\s -> s {symbolTable = generalized})
+  return [binding | (binding, _, _) <- results]
   where
     -- with parameters, `let f p1 p2 : t = e` is sugar for `let f = fun p1 p2 : t -> e`,
     -- so the annotation constrains the result of the function and not f itself

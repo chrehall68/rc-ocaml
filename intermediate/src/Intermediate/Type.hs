@@ -237,7 +237,7 @@ substituteTypes replacements tp = do
 instantiate :: TypeScheme -> TypeVarM Type
 instantiate (Forall unconstrained tp) = do
   let unconstrainedList = Data.Set.toList unconstrained
-  freshVars <- mapM (\_ -> newTypeVar) unconstrainedList
+  freshVars <- mapM (const newTypeVar) unconstrainedList
   let replacements = zip unconstrainedList freshVars
   let replacementMap = Data.Map.fromList (map (fmap TVar) replacements)
   substituteTypes replacementMap tp
