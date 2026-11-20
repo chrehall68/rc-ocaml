@@ -9,7 +9,8 @@ module Intermediate.SymbolTable
     insertValue,
     insertScheme,
     envFreeVars,
-    generalizeCurrentScope,
+    generalizeNames,
+    currentScopeNames,
     resolveType,
     insertType,
     resolveConstructor,
@@ -21,6 +22,7 @@ module Intermediate.SymbolTable
   )
 where
 
+import Control.Monad (foldM)
 import qualified Data.Map
 import qualified Data.Set
 import Frontend.Ast (Path (..))
@@ -129,8 +131,12 @@ initialScope =
       constructors =
         let a = TypeVar (-1)
             option = TCon "option" [TVar a]
+            list = TCon "list" [TVar a]
          in Data.Map.fromList
-              [ ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
+              [ -- lists are an ordinary variant type
+                ("[]", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = list}),
+                ("::", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a, list], constructorResult = list}),
+                ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
                 ("Some", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a], constructorResult = option})
               ],
       fields = Data.Map.empty,
@@ -187,18 +193,26 @@ insertValue table path tp = insertScheme table path (monomorphic tp)
 insertScheme :: SymbolTable -> Path -> TypeScheme -> SymbolTable
 insertScheme = insertIn values (\scope m -> scope {values = m})
 
--- generalizes every value bound in the innermost scope, leaving out the given type variables
--- (the ones the surrounding environment still depends on)
-generalizeCurrentScope :: Data.Set.Set TypeVar -> SymbolTable -> TypeVarM SymbolTable
-generalizeCurrentScope _ [] = error "Bad use of symbol table; generalizing no scopes"
-generalizeCurrentScope envVars (current : outer) = do
-  generalized <- mapM generalizeScheme (values current)
+-- the names bound in the innermost scope
+currentScopeNames :: SymbolTable -> [String]
+currentScopeNames [] = []
+currentScopeNames (current : _) = Data.Map.keys (values current)
+
+-- generalizes the given monomorphic values of the innermost scope,
+-- leaving out the given type variables (the ones something else still depends on)
+generalizeNames :: Data.Set.Set TypeVar -> [String] -> SymbolTable -> TypeVarM SymbolTable
+generalizeNames _ _ [] = error "Bad use of symbol table; generalizing no scopes"
+generalizeNames envVars names (current : outer) = do
+  generalized <- foldM generalizeOne (values current) names
   return $ current {values = generalized} : outer
   where
-    -- already-polymorphic values have nothing more to generalize
-    generalizeScheme scheme@(Forall quantified tp)
-      | Data.Set.null quantified = generalize tp envVars
-      | otherwise = return scheme
+    generalizeOne vals name =
+      case Data.Map.lookup name vals of
+        -- already-polymorphic values have nothing more to generalize
+        Just (Forall quantified tp) | Data.Set.null quantified -> do
+          scheme <- generalize tp envVars
+          return $ Data.Map.insert name scheme vals
+        _ -> return vals
 
 -- the unbound type variables that values in scope still depend on
 -- these must not be generalized, since something else could still bind them

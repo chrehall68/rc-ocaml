@@ -1,6 +1,7 @@
 module TypeAnnotatorSpec (spec) where
 
 import Data.List (isInfixOf)
+import Frontend.Ast (Path (..))
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
 import Intermediate.Type
@@ -280,3 +281,52 @@ spec = do
       typeOf "r" "let id (x : 'a) : 'a = x\nlet r = (id 1, id true)" `shouldBe` Right (TTuple [TInt, TBool])
     it "shares a named type variable within one definition" $
       infer "let f (x : 'a) (y : 'a) = (x + 1, y)\nlet r = f 1 \"s\"" `shouldSatisfy` isLeft'
+
+  describe "lists as constructors" $ do
+    it "lowers [] to the constant constructor" $ do
+      TProgram defs <- either fail return (infer "let r = []")
+      case defs of
+        [TDefinitionLet _ [TLetBinding _ (TEConstant _ c)]] ->
+          c `shouldBe` TConstVariant (Path Nothing "[]")
+        _ -> expectationFailure "unexpected shape"
+    it "lowers :: to a variant applied to a tuple" $ do
+      TProgram defs <- either fail return (infer "let r = 1 :: []")
+      case defs of
+        [TDefinitionLet _ [TLetBinding _ (TEVariant _ path (TETuple {}))]] -> path `shouldBe` Path Nothing "::"
+        _ -> expectationFailure "unexpected shape"
+    it "types list literals" $
+      typeOf "r" "let r = [1; 2; 3]" `shouldBe` Right (TCon "list" [TInt])
+    it "lets [] be a list of anything" $
+      typeOf "r" "let r = ([] : int list), ([] : string list)"
+        `shouldBe` Right (TTuple [TCon "list" [TInt], TCon "list" [TString]])
+    it "rejects mixed list elements" $
+      infer "let r = [1; \"a\"]" `shouldSatisfy` isLeft'
+
+  describe "recursive types" $ do
+    it "defines a recursive polymorphic type" $ do
+      let src = "type 'a mylist = Nil | Cons of 'a * 'a mylist\n"
+      typeOf "r" (src ++ "let r = Cons (1, Cons (2, Nil))") `shouldBe` Right (TCon "mylist" [TInt])
+      infer (src ++ "let r = Cons (1, Cons (\"a\", Nil))") `shouldSatisfy` isLeft'
+    it "does not let nonrec types refer to themselves" $
+      infer "type nonrec t = A of t" `shouldSatisfy` isLeft'
+    it "rejects wrong arguments to a recursive type" $
+      infer "type 'a t = Leaf | Node of 'a t * 'a * 'a t\nlet r : int t = Node (Leaf, \"s\", Leaf)"
+        `shouldSatisfy` isLeft'
+
+  describe "let rec" $ do
+    it "types a recursive function" $
+      typeOf "fact" "let rec fact n = if n < 1 then 1 else n * fact (n - 1)"
+        `shouldBe` Right (TArrow NoLabel TInt TInt)
+    it "generalizes a recursive function" $
+      typeOf "r" "let rec len l = match l with | [] -> 0 | _ :: t -> 1 + len t\nlet r = (len [1], len [true])"
+        `shouldBe` Right (TTuple [TInt, TInt])
+    it "keeps a recursive function monomorphic inside its own body" $
+      infer "let rec f x = (f 1, f true)" `shouldSatisfy` isLeft'
+    it "rejects a non-variable pattern in let rec" $
+      infer "let rec (a, b) = (1, 2)" `shouldSatisfy` isLeft'
+    it "supports local let rec" $
+      typeOf "r" "let r = let rec f n = if n < 1 then 0 else f (n - 1) in f 3" `shouldBe` Right TInt
+    it "does not support let ... and yet" $
+      infer "let a = 1 and b = 2" `shouldSatisfy` isLeft'
+    it "does not support type ... and yet" $
+      infer "type t = A of u and u = B" `shouldSatisfy` isLeft'
