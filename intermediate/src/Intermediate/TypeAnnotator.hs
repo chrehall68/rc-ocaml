@@ -4,9 +4,9 @@ import Control.Monad (when)
 import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwError)
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
-import Data.Foldable (foldlM)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
+import Data.Maybe (fromMaybe)
 import qualified Frontend.Ast as Ast
 import qualified Intermediate.SymbolTable as SymTab
 import Intermediate.Type
@@ -122,7 +122,7 @@ applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
         v <- liftTypes newTypeVar
         let name = "__arg" ++ show (typeVarId v)
         body <- applyTyped rhs (TEVar lhs (Ast.Path Nothing name)) args
-        return $ TEFunction (exprAnnotation body) label Nothing [TCase (TPVariable lhs name) Nothing body]
+        return $ TEFunction (TArrow label lhs (exprAnnotation body)) label Nothing [TCase (TPVariable lhs name) Nothing body]
   case funcType of
     TArrow label lhs rhs
       -- partial application (or a complete one)
@@ -340,7 +340,67 @@ lowerExpr expr =
         loweredInExpr <- lowerExpr inExpr
         return (loweredBindings, loweredInExpr)
       return $ TELet (exprAnnotation loweredInExpr) isRec loweredBindings loweredInExpr
+    Ast.ExprLambda {Ast.parameters = params, Ast.typeConstraint = retConstraint, Ast.body = body} ->
+      lowerParameters params $ do
+        typedBody <- lowerExpr body
+        -- `fun x : t -> e` constrains the body, not the function
+        case retConstraint of
+          Just typeExpr -> do
+            desired <- lowerTypeExpr typeExpr
+            unifyOrRollback (exprAnnotation typedBody) desired
+          Nothing -> return ()
+        return typedBody
     _ -> throwError "Not implemented"
+
+-- lowers `fun p1 p2 -> body` into nested one-argument functions
+-- each parameter gets its own scope, so later parameters (and the body) see earlier ones
+-- `lowerBody` is run in the innermost scope
+lowerParameters :: [Ast.Parameter] -> LowerAndInferM (TExpr Type) -> LowerAndInferM (TExpr Type)
+lowerParameters [] lowerBody = lowerBody
+lowerParameters (param : rest) lowerBody = withScope $ do
+  (argLabel, typedDefault, typedPat, argType) <- lowerParameter param
+  typedBody <- lowerParameters rest lowerBody
+  return $ TEFunction (TArrow argLabel argType (exprAnnotation typedBody)) argLabel typedDefault [TCase typedPat Nothing typedBody]
+
+-- label, default, pattern the parameter binds, and the type of the argument being passed
+-- (which differs from the pattern's type for optional parameters with a default,
+-- since the caller passes a `t option` but the body sees a `t`)
+lowerParameter :: Ast.Parameter -> LowerAndInferM (ArgLabel, Maybe (TExpr Type), TPattern Type, Type)
+lowerParameter param =
+  case param of
+    Ast.ParameterPattern pat -> do
+      typedPat <- lowerAndInsertPattern pat
+      return (NoLabel, Nothing, typedPat, patternAnnotation typedPat)
+    Ast.ParameterLabel {Ast.label = name, Ast.parameterTypeConstraint = constraint, Ast.parameterPattern = pat} -> do
+      -- ~x binds x
+      typedPat <- lowerConstrainedPattern constraint (fromMaybe (Ast.PatternVariable name) pat)
+      return (Labeled name, Nothing, typedPat, patternAnnotation typedPat)
+    Ast.ParameterOptional {Ast.label = name, Ast.parameterTypeConstraint = constraint, Ast.parameterDefault = dflt} ->
+      lowerOptionalParameter name (Ast.PatternVariable name) constraint dflt
+    Ast.ParameterOptionalPattern {Ast.label = name, Ast.pattern = pat, Ast.parameterTypeConstraint = constraint, Ast.parameterDefault = dflt} ->
+      lowerOptionalParameter name pat constraint dflt
+
+lowerOptionalParameter :: String -> Ast.Pattern -> Maybe Ast.TypeExpr -> Maybe Ast.Expr -> LowerAndInferM (ArgLabel, Maybe (TExpr Type), TPattern Type, Type)
+lowerOptionalParameter name pat constraint dflt = do
+  -- the default can't see the variables this parameter binds, so lower it first
+  typedDefault <- traverse lowerExpr dflt
+  typedPat <- lowerConstrainedPattern constraint pat
+  let patType = patternAnnotation typedPat
+  argType <- case typedDefault of
+    Just d -> do
+      -- body sees a t, caller passes a t option
+      unifyOrRollback patType (exprAnnotation d)
+      return $ TCon "option" [patType]
+    Nothing -> do
+      -- without a default, the body sees the option itself
+      inner <- liftTypes newTypeVar
+      unifyOrRollback patType (TCon "option" [TVar inner])
+      return patType
+  return (Optional name, typedDefault, typedPat, argType)
+
+lowerConstrainedPattern :: Maybe Ast.TypeExpr -> Ast.Pattern -> LowerAndInferM (TPattern Type)
+lowerConstrainedPattern constraint pat =
+  lowerAndInsertPattern $ maybe pat (Ast.PatternAnnotated pat) constraint
 
 -- doesn't create a new scope; you should probably create a scope  before using it
 -- if there are variables encountered, they'll be inserted into the current scope
@@ -506,17 +566,20 @@ lowerAndInsertBindings isRec letBindings = do
           unifyOrRollback (patternAnnotation typedPat) (exprAnnotation typedExpr)
           return $ [TLetBinding typedPat typedExpr]
         Ast.LetBindingTyped {Ast.letValueName = name, Ast.params = params, Ast.typeExpression = typeExpr, Ast.coercedType = _c, Ast.expr1 = expr} -> do
-          -- TODO - handle type expressions and functions
-          when (length params /= 0) $ throwError "functions not implemented"
+          -- with parameters, this is sugar for `let f = fun params : t -> e`,
+          -- so the annotation constrains the result of the function and not f itself
+          let (valueExpr, bindingType) = case params of
+                [] -> (expr, typeExpr)
+                _ -> (Ast.ExprLambda params typeExpr expr, Nothing)
           -- then evaluate the expression
-          typedExpr <- lowerExpr expr
+          typedExpr <- lowerExpr valueExpr
           let exprType = exprAnnotation typedExpr
           -- then just create and bind the type variable for our name
           tVar <- liftTypes newTypeVar
           liftTypes $ bindTypeVar tVar exprType
           let tp = TVar tVar
           -- but also it should conform to our typeExpr
-          unifyWith <- case typeExpr of
+          unifyWith <- case bindingType of
             Just tpExpr -> lowerTypeExpr tpExpr
             Nothing -> return tp
           unifyOrRollback unifyWith tp

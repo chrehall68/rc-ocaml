@@ -170,3 +170,38 @@ spec = do
       typeOf "r" "let r = (); 1" `shouldBe` Right TInt
     it "rejects a non-unit left-hand side" $
       infer "let r = 1; 2" `shouldSatisfy` isLeft'
+
+  describe "function definitions" $ do
+    it "types a one-argument function" $
+      typeOf "f" "let f x = x + 1" `shouldBe` Right (TArrow NoLabel TInt TInt)
+    it "types a curried function" $
+      typeOf "f" "let f x (y : string) = x + 1"
+        `shouldBe` Right (TArrow NoLabel TInt (TArrow NoLabel TString TInt))
+    it "types a pattern parameter" $
+      typeOf "f" "let f (a, b) = a + b"
+        `shouldBe` Right (TArrow NoLabel (TTuple [TInt, TInt]) TInt)
+    it "types a function with a return annotation" $
+      typeOf "f" "let f x : int = x" `shouldBe` Right (TArrow NoLabel TInt TInt)
+    it "rejects a wrong return annotation" $
+      infer "let f x : string = x + 1" `shouldSatisfy` isLeft'
+    it "types a lambda" $
+      typeOf "f" "let f = fun x -> x + 1" `shouldBe` Right (TArrow NoLabel TInt TInt)
+    it "types a labeled parameter" $
+      typeOf "f" "let f ~x = x + 1" `shouldBe` Right (TArrow (Labeled "x") TInt TInt)
+    it "types an optional parameter with a default" $
+      typeOf "f" "let f ?(x = 1) () = x"
+        `shouldBe` Right (TArrow (Optional "x") (TCon "option" [TInt]) (TArrow NoLabel TUnit TInt))
+    it "applies a defined function" $
+      typeOf "r" "let f x y = x + y\nlet r = f 1 2" `shouldBe` Right TInt
+    it "applies a labeled function out of order" $
+      typeOf "r" "let f ~a ~b = a - b\nlet r = f ~b:1 ~a:2" `shouldBe` Right TInt
+    it "keeps unlabeled args in order around a label" $ do
+      typeOf "r" "let f ~a x (y : string) = x + a\nlet r = f 1 ~a:2 \"s\"" `shouldBe` Right TInt
+      infer "let f ~a x (y : string) = x + a\nlet r = f \"s\" ~a:2 1" `shouldSatisfy` isLeft'
+    it "eta-expands a skipped labeled parameter" $
+      typeOf "r" "let f ~a x = x + a\nlet r = f 1"
+        `shouldBe` Right (TArrow (Labeled "a") TInt TInt)
+    it "defaults an omitted optional before a positional" $
+      typeOf "r" "let f ?(x = 1) () = x\nlet r = f ()" `shouldBe` Right TInt
+    it "rejects wrong argument types" $
+      infer "let f x = x + 1\nlet r = f \"a\"" `shouldSatisfy` isLeft'

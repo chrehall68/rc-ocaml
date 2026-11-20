@@ -21,8 +21,9 @@ import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Constant, Path, TypeDefinition)
 import Intermediate.Type (ArgLabel)
 
--- t is always the value of the result of the expression
--- ie for a function, it would be the result of the function application (not the type of the function)
+-- t is the type of the expression itself
+-- thus for TEApply, t is the result of the application,
+-- while for TEFunction t is the whole arrow type
 data TExpr t
   = TEConstant t Constant
   | -- a (potentially module-qualified) value name, including operators like (+)
