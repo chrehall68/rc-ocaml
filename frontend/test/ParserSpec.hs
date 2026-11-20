@@ -497,6 +497,38 @@ spec = do
                 Frontend.Ast.value = b
               }
           )
+    it "allows field access as a function argument" $
+      parseExpr "f a.x b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [UnlabeledArgument (ExprFieldAccess {expr = a, field = fieldPath "x"}), UnlabeledArgument b]
+              }
+          )
+    it "allows field access as the function being applied" $
+      parseExpr "a.f b"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = ExprFieldAccess {expr = a, field = fieldPath "f"},
+                args = [UnlabeledArgument b]
+              }
+          )
+    it "allows array and string access as function arguments" $ do
+      parseExpr "f a.(b)"
+        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (ExprArrayAccess {arr = a, index = b})]})
+      parseExpr "f a.[b]"
+        `shouldBe` Right (ExprFunctionApplication {func = var "f", args = [UnlabeledArgument (ExprStringAccess {str = a, index = b})]})
+    it "chains field accesses" $
+      parseExpr "a.f.g"
+        `shouldBe` Right (ExprFieldAccess {expr = ExprFieldAccess {expr = a, field = fieldPath "f"}, field = fieldPath "g"})
+    it "allows field access in a labeled argument" $
+      parseExpr "f ~l:a.x"
+        `shouldBe` Right
+          ( ExprFunctionApplication
+              { func = var "f",
+                args = [LabeledArgument "l" (Just (ExprFieldAccess {expr = a, field = fieldPath "x"}))]
+              }
+          )
     it "reads a module path before the dot as a path, not a constructor" $
       parseExpr "!M.x" `shouldBe` Right (ExprPrefix {op = "!", expr = qualifiedVar ["M"] "x"})
     it "binds a prefix symbol tighter than field access" $

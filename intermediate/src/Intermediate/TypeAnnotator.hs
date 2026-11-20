@@ -5,7 +5,7 @@ import Control.Monad.Except (ExceptT, catchError, liftEither, runExceptT, throwE
 import Control.Monad.State (State, evalState, gets, modify, runState, state)
 import Data.Either (isRight, partitionEithers)
 import Data.Foldable (foldrM)
-import Data.List (partition, (\\))
+import Data.List (nub, partition, (\\))
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map
 import Data.Maybe (fromMaybe)
@@ -234,6 +234,40 @@ applyConstructorPattern constr typedInner = do
     args -> unifyOrRollback (TTuple args) (patternAnnotation typedInner)
   return $ TPVariant constrResult constr typedInner
 
+-- similar to constructors, but for polymorphic records
+-- returns what we know about the field, the record's type, and the field's type
+instantiateField :: Ast.Path -> LowerAndInferM (SymTab.FieldInfo, Type, Type)
+instantiateField path = do
+  symtab <- gets symbolTable
+  info <- liftEither $ SymTab.resolveField symtab path
+  -- the record type and field type must be instantiated together, so that for
+  -- `type 'a box = {contents : 'a}` the 'a in both is the same fresh variable
+  let params = Data.Set.fromList (SymTab.fieldParams info)
+      packed = TTuple [SymTab.fieldRecord info, SymTab.fieldType info]
+  unpacked <- liftTypes $ instantiate (Forall params packed)
+  case unpacked of
+    TTuple [recordType, fieldType] -> return (info, recordType, fieldType)
+    _ -> error "impossible"
+
+-- resolves the fields of a record literal / record pattern, which must all belong
+-- to the same record type. returns that type, every field name the record has,
+-- and the type of each given field (in order)
+instantiateFields :: [Ast.Path] -> LowerAndInferM (Type, [String], [Type])
+instantiateFields [] = error "impossible"
+instantiateFields paths@(firstPath : _) = do
+  when (hasDuplicates paths) $ throwError "a field was given more than once"
+  instantiated <- mapM instantiateField paths
+  case instantiated of
+    [] -> error "impossible"
+    (firstInfo, recordType, _) : _ -> do
+      -- every other field must live in that same record type. each field was
+      -- instantiated separately, so we unify their record types to share the variables
+      -- (this is also what rejects `{a = 1; b = 2}` when a and b are from different records)
+      forM_ (zip paths instantiated) $ \(path, (_, otherRecord, _)) ->
+        unifyOrRollback recordType otherRecord
+          `catchError` \_ -> throwError $ "field " ++ show path ++ " does not belong to the same record type as " ++ show firstPath
+      return (recordType, SymTab.recordFields firstInfo, [fieldTp | (_, _, fieldTp) <- instantiated])
+
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
@@ -275,7 +309,45 @@ lowerExpr expr =
       mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) typedElements
       -- everything worked
       return $ TEArray (TCon "array" [TVar innerVar]) typedElements
-    Ast.ExprRecord source fields -> throwError "records not implemented yet"
+    Ast.ExprRecord source fields -> do
+      let paths = [path | Ast.RecordField path _ _ <- fields]
+      (recordType, allFields, fieldTypes) <- instantiateFields paths
+      -- `{e with ...}` has the same type as e
+      typedSource <- forM source $ \s -> do
+        typedS <- lowerExpr s
+        unifyOrRollback recordType (exprAnnotation typedS)
+        return typedS
+      -- a record literal has to give every field; `with` fills in the rest from the source
+      let missing = [name | name <- allFields, Ast.Path Nothing name `notElem` paths]
+      when (null source && not (null missing)) $
+        throwError $
+          "this record is missing the field(s): " ++ unwords missing
+      typedFields <- forM (zip fields fieldTypes) $ \(Ast.RecordField path annotation valueExpr, fieldTp) -> do
+        typedValue <- lowerExpr valueExpr
+        -- `{x : t = e}` constrains the value
+        forM_ annotation $ \typeExpr -> do
+          desired <- lowerTypeExpr typeExpr
+          unifyOrRollback desired (exprAnnotation typedValue)
+        unifyOrRollback fieldTp (exprAnnotation typedValue)
+        return (path, typedValue)
+      return $ TERecord recordType typedSource typedFields
+    Ast.ExprFieldAccess recordExpr field -> do
+      typedRecord <- lowerExpr recordExpr
+      (_, recordType, fieldTp) <- instantiateField field
+      -- the field tells us what record type the expression has to be
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      return $ TEFieldAccess fieldTp typedRecord field
+    Ast.ExprFieldAssignment recordExpr field valueExpr -> do
+      typedRecord <- lowerExpr recordExpr
+      (info, recordType, fieldTp) <- instantiateField field
+      when (not (SymTab.fieldIsMutable info)) $
+        throwError $
+          "the field " ++ show field ++ " is not mutable"
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      typedValue <- lowerExpr valueExpr
+      unifyOrRollback fieldTp (exprAnnotation typedValue)
+      -- assigning evaluates to ()
+      return $ TEFieldAssignment TUnit typedRecord field typedValue
     Ast.ExprFunctionApplication func args -> do
       typedFunc <- lowerExpr func
       -- then the application needs to work
@@ -542,6 +614,15 @@ lowerAndInsertPattern pat =
       -- transform to cons with an empty list
       let toReduce = foldr (\lhs rhs -> Ast.PatternCons lhs rhs) (Ast.PatternConstant Ast.ConstantList) elems
       lowerAndInsertPattern toReduce
+    Ast.PatternRecord fields _ -> do
+      -- the trailing `; _` makes no difference to the type: fields may always be left out
+      let paths = [path | Ast.PatternField path _ _ <- fields]
+      (recordType, _, fieldTypes) <- instantiateFields paths
+      typedFields <- forM (zip fields fieldTypes) $ \(Ast.PatternField path annotation fieldPat, fieldTp) -> do
+        typedPat <- lowerConstrainedPattern annotation fieldPat
+        unifyOrRollback fieldTp (patternAnnotation typedPat)
+        return (path, typedPat)
+      return $ TPRecord recordType typedFields
     -- TODO: handle the rest of the patterns
     _ -> throwError "bad"
 
@@ -637,7 +718,22 @@ lowerTypeDefinitions isNonrec typedefs = do
           desiredTypes <- mapM lowerTypeExpr typeExprs
           let info = SymTab.ConstructorInfo {SymTab.constructorParams = vars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = nominalType td vars}
           modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing constrName) info})
-      (Nothing, Just (Ast.TypeRecord _fields)) -> throwError "todo"
+      (Nothing, Just (Ast.TypeRecord fieldDecls)) -> do
+        let names = map Ast.fieldDeclName fieldDecls
+        when (hasDuplicates names) $
+          throwError $
+            "type " ++ Ast.typedefName td ++ " has a field defined more than once"
+        forM_ fieldDecls $ \(Ast.FieldDecl mutable fieldName typeExpr) -> do
+          desiredType <- lowerTypeExpr typeExpr
+          let info =
+                SymTab.FieldInfo
+                  { SymTab.fieldParams = vars,
+                    SymTab.fieldType = desiredType,
+                    SymTab.fieldRecord = nominalType td vars,
+                    SymTab.fieldIsMutable = mutable,
+                    SymTab.recordFields = names
+                  }
+          modify (\s -> s {symbolTable = SymTab.insertField (symbolTable s) (Ast.Path Nothing fieldName) info})
       _ -> throwError "re-exporting types not supported yet"
     return (Ast.typedefName td, nominalInfo td vars)
   -- for nonrec, the new names only become visible now
@@ -645,6 +741,9 @@ lowerTypeDefinitions isNonrec typedefs = do
   where
     nominalType td vars = TCon (Ast.typedefName td) (map TVar vars)
     nominalInfo td vars = SymTab.TypeInfo vars (nominalType td vars)
+
+hasDuplicates :: (Eq a) => [a] -> Bool
+hasDuplicates xs = length (nub xs) /= length xs
 
 -- runs an action where 'a in type expressions refers to the type's parameters
 -- the body can only mention the declared parameters

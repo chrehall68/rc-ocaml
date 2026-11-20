@@ -45,11 +45,14 @@ data ConstructorInfo = ConstructorInfo
 -- type 'a box = {mutable contents : 'a}
 -- contents has params ['a], type 'a, record 'a box, and is mutable
 -- params get replaced with fresh type vars at each use, same as constructors
+-- recordFields lists every field of the record (including this one), which
+-- lets us notice when a record literal forgets one
 data FieldInfo = FieldInfo
   { fieldParams :: [TypeVar],
     fieldType :: Type,
     fieldRecord :: Type,
-    fieldIsMutable :: Bool
+    fieldIsMutable :: Bool,
+    recordFields :: [String]
   }
   deriving (Show, Eq)
 
