@@ -1,7 +1,7 @@
 module Intermediate.MatchChecker where
 
 import Data.Either (partitionEithers)
-import Data.List (intercalate)
+import Data.List (find, intercalate)
 import qualified Data.List.NonEmpty
 import Data.Maybe (isNothing)
 import Frontend.Tokens (IntLiteral (..))
@@ -16,6 +16,9 @@ data Witness
     WAny
   | WInt Integer
   | WBool Bool
+  | WDouble Double
+  | WChar Char
+  | WString String
   deriving (Show, Eq)
 
 data MatchError = MatchError
@@ -25,26 +28,44 @@ data MatchError = MatchError
   }
   deriving (Show, Eq)
 
--- binding strength of the context a witness is printed in
--- (so that e.g. "Some (-1)" gets parenthesized once nested)
-data ParenScope = TopScope | ArgScope
+-- actually we'll just have wrapping things be in charge of doing
+-- parentheses
+renderWitness :: Witness -> String
+renderWitness witness = case witness of
+  WAny -> "_"
+  WInt v -> show v
+  WBool b -> if b then "true" else "false"
+  WDouble d -> renderOCamlFloat d
+  WChar c -> "'" ++ concatMap (escapeOCamlChar '\'') [c] ++ "'"
+  WString s -> "\"" ++ concatMap (escapeOCamlChar '"') s ++ "\""
 
-renderWitness :: ParenScope -> Witness -> String
-renderWitness _ WAny = "_"
-renderWitness prec (WInt n)
-  | n < 0 = parenIf prec ("-" ++ show (abs n))
-  | otherwise = show n
-renderWitness _ (WBool b) = if b then "true" else "false"
+-- ocaml prints floats with a trailing "." instead of ".0", e.g. "0." or "1.5"
+renderOCamlFloat :: Double -> String
+renderOCamlFloat d
+  | d == fromInteger whole && abs d < 1e15 = show whole ++ "."
+  | otherwise = show d
+  where
+    whole = truncate d :: Integer
 
-parenIf :: ParenScope -> String -> String
-parenIf ArgScope s = "(" ++ s ++ ")"
-parenIf TopScope s = s
+-- escape a character the way ocaml does inside a literal delimited by `quote`
+escapeOCamlChar :: Char -> Char -> String
+escapeOCamlChar quote c
+  | c == quote = ['\\', c]
+  | c == '\\' = "\\\\"
+  | c == '\n' = "\\n"
+  | c == '\t' = "\\t"
+  | c == '\r' = "\\r"
+  | c == '\b' = "\\b"
+  | c >= ' ' && c <= '~' = [c]
+  | otherwise = '\\' : pad (show (fromEnum c))
+  where
+    pad n = replicate (3 - length n) '0' ++ n
 
 renderMatchError :: MatchError -> String
 renderMatchError (MatchError w hasGuards) =
   "Pattern matching not exhaustive.\n"
     ++ "  Example of a value not matched: "
-    ++ renderWitness TopScope w
+    ++ renderWitness w
     ++ (if hasGuards then "\n  (However, some guarded clause may match this value.)" else "")
 
 -- all checks produce zero or more errors; Right () means no errors
@@ -141,6 +162,32 @@ checkCasesInner matchedTyped cases_ =
       | not (matches True) -> Just (WBool True)
       | not (matches False) -> Just (WBool False)
       | otherwise -> Nothing
+    TFloat
+      | hasCatchall -> Nothing
+      | otherwise ->
+          -- same argument as ints here
+          let used x = lookForPat cases_ $ \pat -> case pat of
+                TPConstant _ (TConstDouble v) -> v == x
+                _ -> False
+           in Just $ WDouble $ until (not . used) (+ 1.0) 0.0
+    TChar
+      | hasCatchall -> Nothing
+      | otherwise ->
+          -- ocaml chars are single bytes, so all 256 can be written out
+          let used x = lookForPat cases_ $ \pat -> case pat of
+                TPConstant _ (TConstChar v) -> v == x
+                _ -> False
+           in case find (not . used) ['\0' .. '\255'] of
+                Just v -> Just $ WChar v
+                Nothing -> Nothing
+    TString
+      | hasCatchall -> Nothing
+      | otherwise ->
+          -- can't write out every string
+          let used x = lookForPat cases_ $ \pat -> case pat of
+                TPConstant _ (TConstString v) -> v == x
+                _ -> False
+           in Just $ WString $ until (not . used) ('a' :) ""
     _ -> Nothing
   where
     hasCatchall = lookForPat cases_ $ \pat -> case pat of
