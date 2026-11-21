@@ -128,6 +128,7 @@ initialScope =
                 ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("mod", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("lxor", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),

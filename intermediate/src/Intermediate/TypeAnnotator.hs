@@ -331,23 +331,6 @@ lowerExpr expr =
         unifyOrRollback fieldTp (exprAnnotation typedValue)
         return (path, typedValue)
       return $ TERecord recordType typedSource typedFields
-    Ast.ExprFieldAccess recordExpr field -> do
-      typedRecord <- lowerExpr recordExpr
-      (_, recordType, fieldTp) <- instantiateField field
-      -- the field tells us what record type the expression has to be
-      unifyOrRollback recordType (exprAnnotation typedRecord)
-      return $ TEFieldAccess fieldTp typedRecord field
-    Ast.ExprFieldAssignment recordExpr field valueExpr -> do
-      typedRecord <- lowerExpr recordExpr
-      (info, recordType, fieldTp) <- instantiateField field
-      when (not (SymTab.fieldIsMutable info)) $
-        throwError $
-          "the field " ++ show field ++ " is not mutable"
-      unifyOrRollback recordType (exprAnnotation typedRecord)
-      typedValue <- lowerExpr valueExpr
-      unifyOrRollback fieldTp (exprAnnotation typedValue)
-      -- assigning evaluates to ()
-      return $ TEFieldAssignment TUnit typedRecord field typedValue
     Ast.ExprFunctionApplication func args -> do
       typedFunc <- lowerExpr func
       -- then the application needs to work
@@ -390,7 +373,24 @@ lowerExpr expr =
           desiredType = TArrow NoLabel (exprAnnotation typedLeft) rhs
       () <- unifyOrRollback desiredType opType
       return $ TEApply (TVar outputType) (TEApply rhs (TEVar opType (Ast.Path Nothing op)) typedLeft) typedRight
-    -- TODO: implement the other things in between as well
+    Ast.ExprFieldAccess recordExpr field -> do
+      typedRecord <- lowerExpr recordExpr
+      (_, recordType, fieldTp) <- instantiateField field
+      -- the field tells us what record type the expression has to be
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      return $ TEFieldAccess fieldTp typedRecord field
+    Ast.ExprFieldAssignment recordExpr field valueExpr -> do
+      typedRecord <- lowerExpr recordExpr
+      (info, recordType, fieldTp) <- instantiateField field
+      when (not (SymTab.fieldIsMutable info)) $
+        throwError $
+          "the field " ++ show field ++ " is not mutable"
+      unifyOrRollback recordType (exprAnnotation typedRecord)
+      typedValue <- lowerExpr valueExpr
+      unifyOrRollback fieldTp (exprAnnotation typedValue)
+      -- assigning evaluates to ()
+      return $ TEFieldAssignment TUnit typedRecord field typedValue
+    -- TODO: arrays and string accesses
     Ast.ExprIf {Ast.cond = cond, Ast.thenExpr = thenExpr, Ast.elseExpr = maybeElseExpr} -> do
       -- need cond to resolve to boolean
       typedCond <- lowerExpr cond
@@ -501,7 +501,6 @@ isNonExpansive expr =
     TEConstant _ _ -> True
     TEVar _ _ -> True
     TEVariant _ _ e -> isNonExpansive e
-    TEPolymorphicVariant _ _ e -> isNonExpansive e
     TETuple _ a b rest -> all isNonExpansive (a : b : rest)
     -- a function is a value no matter what its body does
     TEFunction {} -> True

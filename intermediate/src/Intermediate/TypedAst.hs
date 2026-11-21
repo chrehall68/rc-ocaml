@@ -52,8 +52,9 @@ data TExpr t
     -- a constructor with several arguments takes them as one tuple
     TEVariant t Path (TExpr t)
   | -- TODO: needs row types before it can be typed
-    TEPolymorphicVariant t String (TExpr t)
-  | -- a tuple always has at least two elements
+
+    -- | TEPolymorphicVariant t String (TExpr t)
+    -- a tuple always has at least two elements
     TETuple t (TExpr t) (TExpr t) [TExpr t]
   | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
@@ -124,7 +125,6 @@ exprAnnotation e = case e of
   TEConstant t _ -> t
   TEVar t _ -> t
   TEVariant t _ _ -> t
-  TEPolymorphicVariant t _ _ -> t
   TETuple t _ _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t

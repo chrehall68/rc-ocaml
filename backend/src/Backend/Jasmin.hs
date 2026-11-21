@@ -7,6 +7,7 @@ import Data.List (isSuffixOf)
 import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
+import Intermediate.MatchChecker (ExhaustiveTProgram (..))
 import Intermediate.Type (Type (..))
 import Intermediate.TypedAst
 import Numeric (showHex)
@@ -20,8 +21,8 @@ import Text.Read (readMaybe)
 -- The backend supports primitive values, empty collections, variable and
 -- wildcard bindings, control flow, and selected predefined functions. Other
 -- constructs return an error until their JVM representations are defined.
-generateJasmin :: String -> TProgram Type -> Either String String
-generateJasmin className (TProgram definitions) = do
+generateJasmin :: String -> ExhaustiveTProgram -> Either String String
+generateJasmin className (ExhaustiveTProgram (TProgram definitions)) = do
   unless (validClassName className) $ Left ("Invalid JVM class name " ++ show className)
   ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1 0)
   let locals = nextLocal finalState
@@ -328,7 +329,7 @@ emitExpr env expression = case expression of
         <> instruction 0 ("goto " ++ start)
         <> label end
   TEVariant {} -> reject "variants"
-  TEPolymorphicVariant {} -> reject "polymorphic variants"
+  -- TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
   TEArray {} -> reject "nonempty arrays"
   TERecord {} -> reject "records"

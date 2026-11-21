@@ -4,6 +4,7 @@ import Backend.Jasmin (generateJasmin)
 import Data.Char (toUpper)
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
+import Intermediate.MatchChecker (checkExhaustiveness)
 import Intermediate.TypeAnnotator (lowerAndInfer)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure, exitWith)
@@ -41,8 +42,9 @@ compileFile inputFile = do
   ast <- orExit $ parse tokens
   -- print ast
   typedAst <- orExit $ lowerAndInfer ast
-  -- print typedAst
-  jasminCode <- orExit $ generateJasmin outputName typedAst
+  print typedAst
+  matchCheckedAst <- orExit $ checkExhaustiveness typedAst
+  jasminCode <- orExit $ generateJasmin outputName matchCheckedAst
   writeFile "out.j" jasminCode
   -- TODO: make sure we document that jasmin.jar and java need to be installed
   code <- rawSystem "java" ["-jar", "jasmin.jar", "out.j"]

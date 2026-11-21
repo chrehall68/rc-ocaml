@@ -86,6 +86,7 @@ library intermediate
     Intermediate.Type
     Intermediate.TypeAnnotator
     Intermediate.TypedAst
+    Intermediate.MatchChecker
 
   -- Directories containing source files.
   hs-source-dirs:
