@@ -44,10 +44,10 @@ variant name = ExprConstant (ConstantVariant (Path Nothing name))
 infixE :: String -> Expr -> Expr -> Expr
 infixE o l r = ExprInfix {op = o, left = l, right = r}
 
-int :: Int -> Expr
+int :: Integer -> Expr
 int v = ExprConstant (ConstantInt (IntLiteral {Frontend.Tokens.value = v, representation = Unspecified}))
 
-intPat :: Int -> Pattern
+intPat :: Integer -> Pattern
 intPat v = PatternConstant (ConstantInt (IntLiteral {Frontend.Tokens.value = v, representation = Unspecified}))
 
 spec :: Spec

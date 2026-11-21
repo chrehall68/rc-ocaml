@@ -11,7 +11,7 @@ data IntRepresentation
   deriving (Show, Eq)
 
 data IntLiteral = IntLiteral
-  { value :: Int,
+  { value :: Integer,
     representation :: IntRepresentation
   }
   deriving (Show, Eq)
@@ -156,7 +156,7 @@ infixToken s = case s of
 removeUnderscore :: String -> String
 removeUnderscore s = filter (/= '_') s
 
-decodeOcamlInt :: String -> Int
+decodeOcamlInt :: String -> Integer
 decodeOcamlInt raw =
   case ( case removeUnderscore raw of
            '0' : 'x' : s -> readHex s
@@ -215,12 +215,12 @@ decodeChar s =
           -- the rest of the escape characters
           " " -> ' '
           -- unicode escapes
-          'o' : _ -> chr (decodeOcamlInt ("0" ++ rest))
-          'x' : _ -> chr (decodeOcamlInt ("0" ++ rest))
+          'o' : _ -> chr (fromInteger $ decodeOcamlInt ("0" ++ rest))
+          'x' : _ -> chr (fromInteger $ decodeOcamlInt ("0" ++ rest))
           -- digit
-          _ -> chr (decodeOcamlInt rest)
+          _ -> chr (fromInteger $ decodeOcamlInt rest)
         _ -> first
 
 -- \u{...}
 decodeUnicodeChar :: String -> Char
-decodeUnicodeChar s = chr (decodeOcamlInt ("0x" ++ (drop 3 (init s))))
+decodeUnicodeChar s = chr (fromInteger $ decodeOcamlInt ("0x" ++ (drop 3 (init s))))

@@ -2,10 +2,10 @@ module LexerSpec (spec) where
 
 import Control.Monad (forM_)
 import Frontend.Lexer (alexScanTokens)
-import Test.Hspec
 import Frontend.Tokens
+import Test.Hspec
 
-int :: Int -> IntRepresentation -> Token
+int :: Integer -> IntRepresentation -> Token
 int v r = TokenInt (IntLiteral {value = v, representation = r})
 
 spec :: Spec
@@ -295,5 +295,5 @@ spec = do
     errs es =
       unlines
         [ "Unexpected token " ++ [c] ++ " at line " ++ show l ++ ", column " ++ show col
-          | (c, l, col) <- es
+        | (c, l, col) <- es
         ]

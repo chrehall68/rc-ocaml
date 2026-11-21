@@ -1,6 +1,7 @@
 module Intermediate.MatchChecker where
 
 import Data.Either (partitionEithers)
+import Data.List (intercalate)
 import qualified Data.List.NonEmpty
 import Data.Maybe (isNothing)
 import Frontend.Tokens (IntLiteral (..))
@@ -9,12 +10,51 @@ import Intermediate.TypedAst
 
 newtype ExhaustiveTProgram = ExhaustiveTProgram (TProgram Type)
 
-collectErrors :: [Either String ()] -> Either String ()
+-- an example value that a match fails to cover
+data Witness
+  = -- matches anything; used for sub-patterns that don't matter
+    WAny
+  | WInt Integer
+  | WBool Bool
+  deriving (Show, Eq)
+
+data MatchError = MatchError
+  { meExample :: Witness,
+    -- whether the match had guarded cases (which we assume can fail)
+    meHasGuards :: Bool
+  }
+  deriving (Show, Eq)
+
+-- binding strength of the context a witness is printed in
+-- (so that e.g. "Some (-1)" gets parenthesized once nested)
+data ParenScope = TopScope | ArgScope
+
+renderWitness :: ParenScope -> Witness -> String
+renderWitness _ WAny = "_"
+renderWitness prec (WInt n)
+  | n < 0 = parenIf prec ("-" ++ show (abs n))
+  | otherwise = show n
+renderWitness _ (WBool b) = if b then "true" else "false"
+
+parenIf :: ParenScope -> String -> String
+parenIf ArgScope s = "(" ++ s ++ ")"
+parenIf TopScope s = s
+
+renderMatchError :: MatchError -> String
+renderMatchError (MatchError w hasGuards) =
+  "Pattern matching not exhaustive.\n"
+    ++ "  Example of a value not matched: "
+    ++ renderWitness TopScope w
+    ++ (if hasGuards then "\n  (However, some guarded clause may match this value.)" else "")
+
+-- all checks produce zero or more errors; Right () means no errors
+type Check = Either [MatchError] ()
+
+collectErrors :: [Check] -> Check
 collectErrors results =
-  let (lefts, _) = partitionEithers results
-   in case lefts of
-        [] -> return ()
-        _ -> Left $ unlines lefts
+  case concat (fst (partitionEithers results)) of
+    [] -> return ()
+    errs -> Left errs
 
 -- need to check that matches are exhaustive
 -- we'll walk the same type tree
@@ -22,17 +62,17 @@ collectErrors results =
 -- otherwise, an error string of example cases not matched are returned
 checkExhaustiveness :: TProgram Type -> Either String ExhaustiveTProgram
 checkExhaustiveness prog@(TProgram definitions) =
-  case partitionEithers $ map checkDefinition definitions of
-    ([], _) -> return $ ExhaustiveTProgram prog
-    (lefts, _) -> Left $ unlines lefts
+  case collectErrors $ map checkDefinition definitions of
+    Right () -> return $ ExhaustiveTProgram prog
+    Left errs -> Left $ intercalate "\n" (map renderMatchError errs)
 
-checkDefinition :: TDefinition Type -> Either String ()
+checkDefinition :: TDefinition Type -> Check
 checkDefinition (TDefinitionType _) = return ()
 checkDefinition (TDefinitionExpr expr) = checkExpr expr
 checkDefinition (TDefinitionLet _ bindings) =
   collectErrors $ map (\(TLetBinding _ expr) -> checkExpr expr) bindings
 
-checkExpr :: TExpr Type -> Either String ()
+checkExpr :: TExpr Type -> Check
 checkExpr expr = case expr of
   TEConstant _ _ -> return ()
   TEVar _ _ -> return ()
@@ -69,55 +109,49 @@ checkExpr expr = case expr of
     checkCases (exprAnnotation matchedExpr) cases_
   TETry _ _ _ -> return () -- TODO
 
--- some guarded match may match values
--- but ocaml's compiler doesn't check that, so neither do we
-checkCases :: Type -> [TCase Type] -> Either String ()
+-- guarded cases never count towards exhaustiveness (like ocaml), but we
+-- remember that they exist so the error can mention them
+checkCases :: Type -> [TCase Type] -> Check
 checkCases matchedTp cases_ =
   let unguarded = filter (\(TCase _ guard _) -> isNothing guard) cases_
-   in checkCasesInner matchedTp unguarded
+      hasGuards = length unguarded /= length cases_
+   in case checkCasesInner matchedTp unguarded of
+        Nothing -> return ()
+        Just w -> Left [MatchError w hasGuards]
 
 lookForPat :: [TCase Type] -> (TPattern Type -> Bool) -> Bool
 lookForPat cases_ f = any (\(TCase pat _ _) -> f pat) cases_
 
 -- type that we're matching, unguarded cases
--- returns Left (string of something missing), or ()
-checkCasesInner :: Type -> [TCase Type] -> Either String ()
+-- returns Just (example of an unmatched value), or Nothing if exhaustive
+checkCasesInner :: Type -> [TCase Type] -> Maybe Witness
 checkCasesInner matchedTyped cases_ =
   case matchedTyped of
-    TUnit -> return () -- always ok
-    TInt -> do
-      let hasCatchall = lookForPat cases_ $ \pat -> case pat of
-            TPWildcard _ -> True
-            TPVariable _ _ -> True
-            _ -> False
-      case hasCatchall of
-        True -> return ()
-        False ->
+    TUnit -> Nothing -- always ok
+    TInt
+      | hasCatchall -> Nothing
+      | otherwise ->
           -- find a missing number
           -- guaranteed to eventually terminate since no one can write out all integers
-          let findInt x = lookForPat cases_ $ \pat -> case pat of
-                TPConstant _ (TConstInt (IntLiteral v _)) | v == x -> True
+          let used x = lookForPat cases_ $ \pat -> case pat of
+                TPConstant _ (TConstInt (IntLiteral v _)) -> v == x
                 _ -> False
-              loop x =
-                case findInt x of
-                  True -> loop (x + 1)
-                  False -> x
-              missing = loop 0
-           in Left $ show missing
-    TBool -> do
-      -- need true and false cases
-      let hasTrue = lookForPat cases_ $ \pat -> case pat of
-            TPWildcard _ -> True
-            TPConstant _ (TConstBool True) -> True
-            TPVariable _ _ -> True
-            _ -> False
-      let hasFalse = lookForPat cases_ $ \pat -> case pat of
-            TPWildcard _ -> True
-            TPConstant _ (TConstBool False) -> True
-            TPVariable _ _ -> True
-            _ -> False
-      case (hasTrue, hasFalse) of
-        (True, _) -> Left $ "true"
-        (_, True) -> Left $ "false"
-        _ -> return ()
-    _ -> return ()
+           in Just $ WInt $ until (not . used) (+ 1) 0
+    TBool
+      | not (matches True) -> Just (WBool True)
+      | not (matches False) -> Just (WBool False)
+      | otherwise -> Nothing
+    _ -> Nothing
+  where
+    hasCatchall = lookForPat cases_ $ \pat -> case pat of
+      TPWildcard _ -> True
+      TPVariable _ _ -> True
+      _ -> False
+    matches b =
+      hasCatchall
+        || lookForPat
+          cases_
+          ( \pat -> case pat of
+              TPConstant _ (TConstBool b') -> b == b'
+              _ -> False
+          )

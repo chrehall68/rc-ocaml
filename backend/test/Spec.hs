@@ -6,6 +6,7 @@ import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
+import Intermediate.MatchChecker (ExhaustiveTProgram (ExhaustiveTProgram), checkExhaustiveness)
 import Intermediate.Type (ArgLabel (..), Type (..))
 import Intermediate.TypeAnnotator (lowerAndInfer)
 import Intermediate.TypedAst
@@ -18,6 +19,7 @@ main = hspec $ describe "generateJasmin" $ do
           alexScanTokens "let x = 40;; let y = x + 2"
             >>= parse
             >>= lowerAndInfer
+            >>= checkExhaustiveness
             >>= generateJasmin "example/Program"
     withCode generated $ \code -> do
       code `shouldContain` ".class public example/Program\n"
@@ -37,7 +39,8 @@ main = hspec $ describe "generateJasmin" $ do
         bind name rhs = TLetBinding (TPVariable TInt name) rhs
         local = TELet TInt False [bind "x" (integer 2), bind "y" (variable "x")] (variable "y")
         program = TProgram [TDefinitionLet False [bind "x" (integer 1)], TDefinitionExpr local, TDefinitionExpr (variable "x")]
-    withCode (generateJasmin "Program" program) $ \code ->
+        eprogram = ExhaustiveTProgram program
+    withCode (generateJasmin "Program" eprogram) $ \code ->
       code `shouldContain` "  lstore 3\n  lload 1\n  lstore 5\n  lload 5\n  pop2\n  lload 1\n"
 
   it "quotes control characters, quotes, backslashes, and non-BMP characters" $ do
@@ -50,13 +53,13 @@ main = hspec $ describe "generateJasmin" $ do
     generateExpressions [expression] `shouldSatisfy` either (isInfixOf "function values") (const False)
 
   it "rejects invalid class names before rendering" $
-    generateJasmin "example//Program" (TProgram []) `shouldBe` Left "Invalid JVM class name \"example//Program\""
+    generateJasmin "example//Program" (ExhaustiveTProgram $ TProgram []) `shouldBe` Left "Invalid JVM class name \"example//Program\""
 
   it "rejects unqualified names that could be Jasmin keywords" $
-    generateJasmin "return" (TProgram []) `shouldBe` Left "Invalid JVM class name \"return\""
+    generateJasmin "return" (ExhaustiveTProgram $ TProgram []) `shouldBe` Left "Invalid JVM class name \"return\""
 
   it "rejects methods that exceed the JVM code size limit" $ do
-    let program = TProgram (replicate 17000 (TDefinitionExpr (integer 1)))
+    let program = ExhaustiveTProgram $ TProgram (replicate 17000 (TDefinitionExpr (integer 1)))
     generateJasmin "Program" program `shouldSatisfy` either (isInfixOf "65,535-byte code limit") (const False)
 
   it "rejects branch targets outside a signed 16-bit offset" $ do
@@ -81,17 +84,18 @@ main = hspec $ describe "generateJasmin" $ do
           alexScanTokens "let empty = [||];; let copy = empty"
             >>= parse
             >>= lowerAndInfer
+            >>= checkExhaustiveness
             >>= generateJasmin "Program"
     withCode generated $ \code ->
       code `shouldContain` "  anewarray java/lang/Object\n  astore 1\n  aload 1\n"
 
 generateExpressions :: [TExpr Type] -> Either String String
-generateExpressions = generateJasmin "Program" . TProgram . map TDefinitionExpr
+generateExpressions = generateJasmin "Program" . ExhaustiveTProgram . TProgram . map TDefinitionExpr
 
 withCode :: Either String String -> (String -> Expectation) -> Expectation
 withCode result check = either expectationFailure check result
 
-integer :: Int -> TExpr Type
+integer :: Integer -> TExpr Type
 integer n = TEConstant TInt (TConstInt (IntLiteral n Unspecified))
 
 double :: Double -> TExpr Type

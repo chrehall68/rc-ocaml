@@ -42,7 +42,7 @@ compileFile inputFile = do
   ast <- orExit $ parse tokens
   -- print ast
   typedAst <- orExit $ lowerAndInfer ast
-  print typedAst
+  -- print typedAst
   matchCheckedAst <- orExit $ checkExhaustiveness typedAst
   jasminCode <- orExit $ generateJasmin outputName matchCheckedAst
   writeFile "out.j" jasminCode
