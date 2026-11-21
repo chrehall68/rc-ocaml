@@ -94,8 +94,9 @@ data TPattern t
   | TPWildcard t
   | TPConstant t TConstant
   | TPAlias t (TPattern t) String
-  | TPOr t (TPattern t) (TPattern t)
-  | TPVariant t Path (TPattern t)
+  | -- TODO: needs lowering (and rules on names in different branches) before it can be typed
+    -- TPOr t (TPattern t) (TPattern t)
+    TPVariant t Path (TPattern t)
   | -- TODO: needs row types before it can be typed
     TPPolymorphicVariant t String (TPattern t)
   | -- #typ, matches any polymorphic variant tag in typ
@@ -104,8 +105,9 @@ data TPattern t
   | TPArray t [TPattern t]
   | -- the trailing ; _ doesn't matter once the record type is known
     TPRecord t [(Path, TPattern t)]
-  | TPRange t Char Char
-  | TPLazy t (TPattern t)
+  | -- TODO: needs lowering before it can be typed
+    -- TPRange t Char Char
+    TPLazy t (TPattern t)
   | TPException t (TPattern t)
   deriving (Show, Eq, Functor, Foldable, Traversable)
 
@@ -146,13 +148,11 @@ patternAnnotation p = case p of
   TPWildcard t -> t
   TPConstant t _ -> t
   TPAlias t _ _ -> t
-  TPOr t _ _ -> t
   TPVariant t _ _ -> t
   TPPolymorphicVariant t _ _ -> t
   TPType t _ -> t
   TPTuple t _ -> t
   TPArray t _ -> t
   TPRecord t _ -> t
-  TPRange t _ _ -> t
   TPLazy t _ -> t
   TPException t _ -> t

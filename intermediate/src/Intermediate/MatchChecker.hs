@@ -113,22 +113,13 @@ checkExpr expr = case expr of
   TELet _ _ bindings body -> collectErrors $ map checkExpr $ body : (map (\(TLetBinding _ expr) -> expr) bindings)
   -- deliberately applying match and function last
   TEFunction tp _ defaultExpr cases_ ->
-    let caseExprs =
-          concatMap
-            ( \(TCase _ guard body) ->
-                case guard of
-                  Just g -> [g, body]
-                  Nothing -> [body]
-            )
-            cases_
-        otherItems = case defaultExpr of
-          Just d -> d : caseExprs
-          Nothing -> caseExprs
-        otherResults = map checkExpr otherItems
-     in collectErrors $ (checkCases tp cases_) : otherResults
+    collectErrors $ checkCases tp cases_ : map checkExpr (maybe id (:) defaultExpr (caseExprs cases_))
   TEMatch _ matchedExpr cases_ ->
-    checkCases (exprAnnotation matchedExpr) cases_
+    collectErrors $ checkCases (exprAnnotation matchedExpr) cases_ : map checkExpr (matchedExpr : caseExprs cases_)
   TETry _ _ _ -> return () -- TODO
+
+caseExprs :: [TCase Type] -> [TExpr Type]
+caseExprs = concatMap (\(TCase _ guard body) -> maybe id (:) guard [body])
 
 -- guarded cases never count towards exhaustiveness (like ocaml), but we
 -- remember that they exist so the error can mention them
@@ -141,7 +132,14 @@ checkCases matchedTp cases_ =
         Just w -> Left [MatchError w hasGuards]
 
 lookForPat :: [TCase Type] -> (TPattern Type -> Bool) -> Bool
-lookForPat cases_ f = any (\(TCase pat _ _) -> f pat) cases_
+lookForPat cases_ f = any (\(TCase pat _ _) -> any f (flattenPat pat)) cases_
+
+-- reduce a pattern to the alternatives it is made of
+-- TODO: expand or-patterns here once they exist in the typed ast
+flattenPat :: TPattern Type -> [TPattern Type]
+flattenPat pat = case pat of
+  TPAlias _ inner _ -> flattenPat inner
+  _ -> [pat]
 
 -- type that we're matching, unguarded cases
 -- returns Just (example of an unmatched value), or Nothing if exhaustive
