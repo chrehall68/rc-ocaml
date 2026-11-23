@@ -22,7 +22,7 @@ module Intermediate.TypedAst where
 import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Path, TypeDefinition)
 import Frontend.Tokens (IntLiteral)
-import Intermediate.SymbolTable (ConstructorInfo)
+import Intermediate.SymbolTable (ConstructorInfo, FieldInfo)
 import Intermediate.Type (ArgLabel)
 
 -- the constants that can remain after lowering
@@ -105,7 +105,8 @@ data TPattern t
   | TPTuple t [TPattern t]
   | TPArray t [TPattern t]
   | -- the trailing ; _ doesn't matter once the record type is known
-    TPRecord t [(Path, TPattern t)]
+    -- the FieldInfo is one of the record's fields, which lets us find all of them
+    TPRecord t FieldInfo [(Path, TPattern t)]
   | -- TODO: needs lowering before it can be typed
     -- TPRange t Char Char
     TPLazy t (TPattern t)
@@ -154,6 +155,6 @@ patternAnnotation p = case p of
   TPType t _ -> t
   TPTuple t _ -> t
   TPArray t _ -> t
-  TPRecord t _ -> t
+  TPRecord t _ _ -> t
   TPLazy t _ -> t
   TPException t _ -> t

@@ -3,7 +3,8 @@ module MatchCheckerSpec (spec) where
 import Data.List (isInfixOf)
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
-import Intermediate.MatchChecker (checkExhaustiveness)
+import Intermediate.MatchChecker (checkExhaustiveness, uselessCases)
+import Intermediate.TypedAst
 import Intermediate.TypeAnnotator (lowerAndInfer)
 import Test.Hspec
 
@@ -12,6 +13,14 @@ check :: String -> Either String ()
 check src = do
   typed <- alexScanTokens src >>= parse >>= lowerAndInfer
   () <$ checkExhaustiveness typed
+
+-- positions of the cases that can never match, in the last top-level match of the source
+uselessIn :: String -> [Int]
+uselessIn src = case alexScanTokens src >>= parse >>= lowerAndInfer of
+  Right (TProgram defs) -> case last defs of
+    TDefinitionExpr (TEMatch _ scrutinee cases_) -> uselessCases (exprAnnotation scrutinee) cases_
+    _ -> error "the source must end with a match"
+  Left err -> error err
 
 -- the match is not exhaustive, and the error contains every given piece of text
 rejectedWith :: [String] -> Either String () -> Expectation
@@ -237,6 +246,116 @@ spec = do
     it "reports a refutable optional parameter with a default" $
       rejectedWith ["not matched: None"] $
         check "let f ?(x = Some 1) () = x;; let g ?x:(Some y = Some 1) () = y"
+
+  describe "records" $ do
+    it "accepts a record with every combination" $
+      accepted $
+        check "type r = {a: bool; b: bool};; let x = {a = true; b = true};; match x with | {a = true; b = _} -> () | {a = false; b = true} -> () | {a = false; b = false} -> ()"
+    it "accepts a wildcard" $
+      accepted $
+        check "type r = {a: bool};; let x = {a = true};; match x with | _ -> ()"
+    it "accepts a record pattern that mentions no fields' values" $
+      accepted $
+        check "type r = {a: bool; b: int};; let x = {a = true; b = 1};; match x with | {a = _; b = _} -> ()"
+    it "accepts a pattern that leaves out fields" $
+      accepted $
+        check "type r = {a: bool; b: int};; let x = {a = true; b = 1};; match x with | {a = true} -> () | {a = false} -> ()"
+    it "accepts a trailing wildcard" $
+      accepted $
+        check "type r = {a: bool; b: int};; let x = {a = true; b = 1};; match x with | {a = true; _} -> () | {b; _} -> ()"
+    it "reports a missing value of the only field" $
+      rejectedWith ["not matched: {a = false}"] $
+        check "type r = {a: bool};; let x = {a = true};; match x with | {a = true} -> ()"
+    it "reports a missing combination, naming every field" $
+      rejectedWith ["not matched: {a = false; b = false}"] $
+        check "type r = {a: bool; b: bool};; let x = {a = true; b = true};; match x with | {a = true; b = _} -> () | {a = false; b = true} -> ()"
+    it "reports a missing combination when a field was left out" $
+      rejectedWith ["not matched: {a = false; b = _}"] $
+        check "type r = {a: bool; b: bool};; let x = {a = true; b = true};; match x with | {a = true} -> ()"
+    it "reports a missing constant in an int field" $
+      rejectedWith ["not matched: {a = true; b = 1}"] $
+        check "type r = {a: bool; b: int};; let x = {a = true; b = 1};; match x with | {a = true; b = 0} -> () | {a = false; b = _} -> ()"
+    it "instantiates the type parameter of a polymorphic record" $
+      rejectedWith ["not matched: {contents = Some false}"] $
+        check "type 'a box = {contents: 'a option};; let x = {contents = Some true};; match x with | {contents = None} -> () | {contents = Some true} -> ()"
+    it "checks records nested in constructors" $
+      rejectedWith ["not matched: Some {a = false}"] $
+        check "type r = {a: bool};; let x = Some {a = true};; match x with | None -> () | Some {a = true} -> ()"
+    it "checks constructors nested in records" $
+      rejectedWith ["not matched: {a = None; b = _}"] $
+        check "type r = {a: int option; b: bool};; let x = {a = None; b = true};; match x with | {a = Some _; b = _} -> ()"
+    it "checks records nested in records" $
+      rejectedWith ["not matched: {inner = {a = false}}"] $
+        check "type i = {a: bool};; type o = {inner: i};; let x = {inner = {a = true}};; match x with | {inner = {a = true}} -> ()"
+    it "checks records inside tuples" $
+      rejectedWith ["not matched: ({a = false}, _)"] $
+        check "type r = {a: bool};; let t = ({a = true}, 1);; match t with | ({a = true}, _) -> ()"
+    it "handles aliases inside records and tuples" $
+      accepted $
+        check "type r = {a: bool};; let t = ({a = true}, 1);; match t with | (({a = _} as r), _) -> ()"
+    it "reports a refutable record binding" $
+      rejectedWith ["not matched: {a = false}"] $
+        check "type r = {a: bool};; let {a = true} = {a = true}"
+    it "accepts an irrefutable record binding" $
+      accepted $
+        check "type r = {a: bool; b: int};; let {a; b} = {a = true; b = 1}"
+    it "does not let a guarded record clause make a match exhaustive" $
+      rejectedWith [guardNote] $
+        check "type r = {a: bool};; let x = {a = true};; match x with | {a = _} when true -> ()"
+
+  describe "useless cases" $ do
+    it "finds nothing when every case matters" $
+      uselessIn "let x = 1;; match x with | 0 -> () | 1 -> () | _ -> ()" `shouldBe` []
+    it "finds a case after a catch-all" $
+      uselessIn "let x = 1;; match x with | _ -> () | 0 -> ()" `shouldBe` [1]
+    it "finds a repeated constant" $
+      uselessIn "let x = 1;; match x with | 0 -> () | 0 -> () | _ -> ()" `shouldBe` [1]
+    it "finds a repeated bool" $
+      uselessIn "let x = true;; match x with | true -> () | false -> () | true -> ()" `shouldBe` [2]
+    it "finds every useless case" $
+      uselessIn "let x = 1;; match x with | _ -> () | 0 -> () | 1 -> ()" `shouldBe` [1, 2]
+    it "finds a case made redundant by several earlier cases together" $
+      uselessIn "let x = true;; match x with | true -> () | false -> () | _ -> ()" `shouldBe` [2]
+    it "does not let a guarded case rule out later ones" $
+      uselessIn "let x = 1;; match x with | _ when true -> () | 0 -> ()" `shouldBe` []
+    it "still checks a guarded case against the earlier ones" $
+      uselessIn "let x = 1;; match x with | _ -> () | 0 when true -> ()" `shouldBe` [1]
+    it "finds a repeated tuple" $
+      uselessIn "let t = (true, 1);; match t with | (true, _) -> () | (_, 0) -> () | (true, 0) -> () | _ -> ()" `shouldBe` [2]
+    it "finds a tuple covered column by column" $
+      uselessIn "let t = (true, false);; match t with | (true, _) -> () | (false, _) -> () | (_, true) -> ()" `shouldBe` [2]
+    it "keeps a tuple that is only partly covered" $
+      uselessIn "let t = (true, 1);; match t with | (true, 0) -> () | (true, _) -> () | (false, _) -> ()" `shouldBe` []
+    it "finds a repeated constructor" $
+      uselessIn "let x = Some 1;; match x with | Some _ -> () | None -> () | Some 0 -> ()" `shouldBe` [2]
+    it "finds a constructor argument that is already covered" $
+      uselessIn "let x = Some true;; match x with | Some true -> () | Some false -> () | Some _ -> () | None -> ()" `shouldBe` [2]
+    it "keeps a constructor case with a narrower argument" $
+      uselessIn "let x = Some 1;; match x with | Some 0 -> () | Some _ -> () | None -> ()" `shouldBe` []
+    it "finds a repeated constant constructor" $
+      uselessIn "let x = Some 1;; match x with | None -> () | None -> () | Some _ -> ()" `shouldBe` [1]
+    it "finds useless list cases" $
+      uselessIn "let l = [1];; match l with | [] -> () | _ :: _ -> () | [_] -> ()" `shouldBe` [2]
+    it "keeps list cases that split by length" $
+      uselessIn "let l = [1];; match l with | [] -> () | [_] -> () | _ :: _ :: _ -> ()" `shouldBe` []
+    it "finds a multi-argument constructor case already covered" $
+      uselessIn "type t = P of int * bool | Q;; let x = Q;; match x with | P (_, _) -> () | Q -> () | P (0, true) -> ()" `shouldBe` [2]
+    it "finds nested constructors that are already covered" $
+      uselessIn "let x = Some (Some 1);; match x with | Some _ -> () | None -> () | Some (Some _) -> ()" `shouldBe` [2]
+    it "sees through aliases" $
+      uselessIn "let x = Some 1;; match x with | Some _ as y -> () | None -> () | Some 0 -> ()" `shouldBe` [2]
+    it "finds a repeated record" $
+      uselessIn "type r = {a: bool; b: bool};; let x = {a = true; b = true};; match x with | {a = true} -> () | {a = _; b = _} -> () | {a = true; b = false} -> ()" `shouldBe` [2]
+    it "keeps record cases that differ in a field" $
+      uselessIn "type r = {a: bool; b: bool};; let x = {a = true; b = true};; match x with | {a = true; b = true} -> () | {a = true; b = false} -> () | {a = false} -> ()" `shouldBe` []
+    it "finds a record case made redundant by omitted fields" $
+      uselessIn "type r = {a: bool; b: int};; let x = {a = true; b = 1};; match x with | {a = true} -> () | {a = true; b = 0} -> () | {a = false} -> ()" `shouldBe` [1]
+    it "checks records inside constructors" $
+      uselessIn "type r = {a: bool};; let x = Some {a = true};; match x with | Some {a = _} -> () | None -> () | Some {a = true} -> ()" `shouldBe` [2]
+    it "checks constructors inside records" $
+      uselessIn "type r = {a: int option};; let x = {a = None};; match x with | {a = Some _} -> () | {a = None} -> () | {a = Some 0} -> ()" `shouldBe` [2]
+    it "checks strings and chars" $
+      uselessIn "let s = \"a\";; match s with | \"a\" -> () | \"a\" -> () | _ -> ()" `shouldBe` [1]
 
   describe "guards" $ do
     it "does not let a guarded clause make a match exhaustive" $

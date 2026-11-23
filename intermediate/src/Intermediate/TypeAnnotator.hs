@@ -262,7 +262,8 @@ instantiateField path = do
 -- resolves the fields of a record literal / record pattern, which must all belong
 -- to the same record type. returns that type, every field name the record has,
 -- and the type of each given field (in order)
-instantiateFields :: [Ast.Path] -> LowerAndInferM (Type, [String], [Type])
+-- the FieldInfo returned is the first field's
+instantiateFields :: [Ast.Path] -> LowerAndInferM (Type, SymTab.FieldInfo, [Type])
 instantiateFields [] = error "impossible"
 instantiateFields paths@(firstPath : _) = do
   when (hasDuplicates paths) $ throwError "a field was given more than once"
@@ -276,7 +277,7 @@ instantiateFields paths@(firstPath : _) = do
       forM_ (zip paths instantiated) $ \(path, (_, otherRecord, _)) ->
         unifyOrRollback recordType otherRecord
           `catchError` \_ -> throwError $ "field " ++ show path ++ " does not belong to the same record type as " ++ show firstPath
-      return (recordType, SymTab.recordFields firstInfo, [fieldTp | (_, _, fieldTp) <- instantiated])
+      return (recordType, firstInfo, [fieldTp | (_, _, fieldTp) <- instantiated])
 
 lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
@@ -320,7 +321,8 @@ lowerExpr expr =
       return $ TEArray (TCon (builtinTypeName "array") [TVar innerVar]) typedElements
     Ast.ExprRecord source fields -> do
       let paths = [path | Ast.RecordField path _ _ <- fields]
-      (recordType, allFields, fieldTypes) <- instantiateFields paths
+      (recordType, firstInfo, fieldTypes) <- instantiateFields paths
+      let allFields = SymTab.recordFields firstInfo
       -- `{e with ...}` has the same type as e
       typedSource <- forM source $ \s -> do
         typedS <- lowerExpr s
@@ -624,12 +626,12 @@ lowerAndInsertPattern pat =
     Ast.PatternRecord fields _ -> do
       -- the trailing `; _` makes no difference to the type: fields may always be left out
       let paths = [path | Ast.PatternField path _ _ <- fields]
-      (recordType, _, fieldTypes) <- instantiateFields paths
+      (recordType, firstInfo, fieldTypes) <- instantiateFields paths
       typedFields <- forM (zip fields fieldTypes) $ \(Ast.PatternField path annotation fieldPat, fieldTp) -> do
         typedPat <- lowerConstrainedPattern annotation fieldPat
         unifyOrRollback fieldTp (patternAnnotation typedPat)
         return (path, typedPat)
-      return $ TPRecord recordType typedFields
+      return $ TPRecord recordType firstInfo typedFields
     -- TODO: handle the rest of the patterns
     _ -> throwError "bad"
 
@@ -740,15 +742,16 @@ lowerTypeDefinitions isNonrec typedefs = do
         when (hasDuplicates names) $
           throwError $
             "type " ++ Ast.typedefName td ++ " has a field defined more than once"
-        forM_ fieldDecls $ \(Ast.FieldDecl mutable fieldName typeExpr) -> do
-          desiredType <- lowerTypeExpr typeExpr
+        fieldTypes <- forM fieldDecls $ \(Ast.FieldDecl _ _ typeExpr) -> lowerTypeExpr typeExpr
+        forM_ (zip fieldDecls fieldTypes) $ \(Ast.FieldDecl mutable fieldName _, desiredType) -> do
           let info =
                 SymTab.FieldInfo
                   { SymTab.fieldParams = vars,
                     SymTab.fieldType = desiredType,
                     SymTab.fieldRecord = nominalType name vars,
                     SymTab.fieldIsMutable = mutable,
-                    SymTab.recordFields = names
+                    SymTab.recordFields = names,
+                    SymTab.recordFieldTypes = fieldTypes
                   }
           modify (\s -> s {symbolTable = SymTab.insertField (symbolTable s) (Ast.Path Nothing fieldName) info})
         return []

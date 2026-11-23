@@ -1,12 +1,12 @@
 module Intermediate.MatchChecker where
 
 import Data.Either (partitionEithers)
-import Data.List (find, intercalate, nub, (\\))
+import Data.List (find, intercalate, nub)
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (isJust)
-import Debug.Trace (trace)
+import Data.Maybe (isJust, isNothing)
+import Frontend.Ast (Path (..))
 import Frontend.Tokens (IntLiteral (..))
-import Intermediate.SymbolTable (ConstructorInfo (..), Sibling (Sibling))
+import Intermediate.SymbolTable (ConstructorInfo (..), FieldInfo (..), Sibling (Sibling))
 import Intermediate.Type (Type (..), TypeVar)
 import Intermediate.TypedAst
 
@@ -22,6 +22,8 @@ data Witness
   | WChar Char
   | WString String
   | WTuple [Witness]
+  | -- every field of the record, in declaration order
+    WRecord [(String, Witness)]
   | WCon String (Maybe Witness)
   deriving (Show, Eq)
 
@@ -42,6 +44,7 @@ renderWitness witness = case witness of
   WDouble d -> renderOCamlFloat d
   WChar c -> "'" ++ concatMap (escapeOCamlChar '\'') [c] ++ "'"
   WString s -> "\"" ++ concatMap (escapeOCamlChar '"') s ++ "\""
+  WRecord fields -> "{" ++ intercalate "; " [name ++ " = " ++ renderWitness w | (name, w) <- fields] ++ "}"
   WTuple args -> "(" ++ (intercalate ", " $ map renderWitness args) ++ ")"
   WCon "::" (Just (WTuple [hd, tl])) -> renderOperand hd ++ " :: " ++ renderOperand tl
   WCon "::" (Just WAny) -> "_ :: _"
@@ -238,6 +241,7 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
           tupleAction types Nothing
         TCon _ typeArgs ->
           case headConstrs of
+            [] | (recordInfo : _) <- [info | TPRecord _ info _ <- heads] -> recordAction typeArgs recordInfo Nothing
             [] -> do
               -- we know we had at least one pattern to us
               -- but the fact that we have no constructors means everything is a wildcard
@@ -253,12 +257,8 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
                     Nothing ->
                       -- we span the space, so try instantiating as any one of the constructors
                       let uniqueConstrs = nub headConstrs
-                       in case find (isJust . snd) $ map (\constr -> (constr, setupTConCall typeArgs constr)) uniqueConstrs of
-                            Just ((ConstructorInfo name _ _ _ args _), (Just witnesses)) ->
-                              case args of
-                                [] -> return $ WCon name Nothing : witnesses
-                                -- several args were expanded as one tuple type, so they are one witness
-                                _ -> return $ WCon name (Just $ head witnesses) : tail witnesses
+                       in case find (isJust . snd) $ map (\constr -> (constr, setupTConCall typeArgs constr Nothing)) uniqueConstrs of
+                            Just (constr, (Just witnesses)) -> return $ wrapConstructor constr witnesses
                             Just _ -> error "impossible"
                             Nothing -> Nothing
                     Just (Sibling name hasArgument) -> do
@@ -275,53 +275,46 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
       -- is a constructed thing
       -- so expand cur type, if possible, and continue matching
       -- on anything that also matches what we match
-      case headType of
-        TUnit ->
+      case (headType, flattenPat headExamined) of
+        (TUnit, _) ->
           -- should be everything
-          checkUsefulness tailTypes (map tail remainingPats) tailExamined
-        TInt ->
-          let (TPConstant _ (TConstInt (IntLiteral x _))) = headExamined
-              nextPats = takeMatchingRests $ \pat -> case pat of
+          (WTuple [] :) <$> checkUsefulness tailTypes (map tail remainingPats) tailExamined
+        (TInt, TPConstant _ (TConstInt (IntLiteral x _))) ->
+          let nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstInt (IntLiteral v _)) -> v == x
                 _ -> False
-           in checkUsefulness tailTypes nextPats tailExamined
-        TBool ->
-          let (TPConstant _ (TConstBool x)) = headExamined
-              nextPats = takeMatchingRests $ \pat -> case pat of
+           in (WInt x :) <$> checkUsefulness tailTypes nextPats tailExamined
+        (TBool, TPConstant _ (TConstBool x)) ->
+          let nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstBool v) -> v == x
                 _ -> False
-           in checkUsefulness tailTypes nextPats tailExamined
-        TFloat ->
-          let (TPConstant _ (TConstDouble x)) = headExamined
-              nextPats = takeMatchingRests $ \pat -> case pat of
+           in (WBool x :) <$> checkUsefulness tailTypes nextPats tailExamined
+        (TFloat, TPConstant _ (TConstDouble x)) ->
+          let nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstDouble v) -> v == x
                 _ -> False
-           in checkUsefulness tailTypes nextPats tailExamined
-        TChar ->
-          let (TPConstant _ (TConstChar x)) = headExamined
-              nextPats = takeMatchingRests $ \pat -> case pat of
+           in (WDouble x :) <$> checkUsefulness tailTypes nextPats tailExamined
+        (TChar, TPConstant _ (TConstChar x)) ->
+          let nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstChar v) -> v == x
                 _ -> False
-           in checkUsefulness tailTypes nextPats tailExamined
-        TString ->
-          let (TPConstant _ (TConstString x)) = headExamined
-              nextPats = takeMatchingRests $ \pat -> case pat of
+           in (WChar x :) <$> checkUsefulness tailTypes nextPats tailExamined
+        (TString, TPConstant _ (TConstString x)) ->
+          let nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstString v) -> v == x
                 _ -> False
-           in checkUsefulness tailTypes nextPats tailExamined
-        TArrow _ _ _ -> error "arrows should always be wildcards"
-        TTuple types ->
+           in (WString x :) <$> checkUsefulness tailTypes nextPats tailExamined
+        (TArrow _ _ _, _) -> error "arrows should always be wildcards"
+        (TTuple types, TPTuple _ headItems) ->
           -- expand the tuple and update all things
-          let TPTuple _ headItems = headExamined
-           in tupleAction types (Just headItems)
-        TCon _ typeArgs ->
-          -- need to expand
-          let constrInfo = case headExamined of
-                TPVariant _ info _ -> info
-                TPConstant _ (TConstVariant info) -> info
-                _ -> error "impossible"
-           in setupTConCall typeArgs constrInfo
-        _ -> Nothing
+          tupleAction types (Just headItems)
+        (TCon _ typeArgs, TPRecord _ info given) ->
+          -- fields the pattern doesn't mention match anything
+          let items = [maybe (TPWildcard tp) id (lookup name (givenFields given)) | (name, tp) <- zip (recordFields info) (recordTypes typeArgs info)]
+           in recordAction typeArgs info (Just items)
+        (TCon _ typeArgs, TPVariant _ info inner) -> setupTConCall typeArgs info (Just [inner]) >>= Just . wrapConstructor info
+        (TCon _ typeArgs, TPConstant _ (TConstVariant info)) -> setupTConCall typeArgs info (Just []) >>= Just . wrapConstructor info
+        _ -> error "impossible"
   where
     -- automatically includes wildcards
     takeMatchingRests f =
@@ -362,7 +355,7 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
                     -- replaces type params with the given types
     tupleAction types maybeHeadItems =
       let wildcards = map (\tp -> TPWildcard tp) types
-          expander = \(pat : rest) -> case pat of
+          expander = \(pat : rest) -> case flattenPat pat of
             TPWildcard _ ->
               -- gets expanded into a bunch  of _'s
               wildcards ++ rest
@@ -383,7 +376,31 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
               let (tupleArgs, rest) = splitAt (length types) witnesses
                in Just $ WTuple tupleArgs : rest
 
-    setupTConCall typeArgs desiredConstr@(ConstructorInfo _ _ _ params declaredArgs _) =
+    -- a record is like a tuple of its fields
+    -- maybeHeadItems are the examined pattern's field patterns, in declaration order
+    recordAction typeArgs info maybeHeadItems =
+      let names = recordFields info
+          types = recordTypes typeArgs info
+          wildcards = map TPWildcard types
+          expander = \(pat : rest) -> case flattenPat pat of
+            TPWildcard _ -> wildcards ++ rest
+            TPVariable _ _ -> wildcards ++ rest
+            TPRecord _ _ given ->
+              -- fields the pattern doesn't mention match anything
+              [ maybe wild id (lookup name (givenFields given))
+              | (name, wild) <- zip names wildcards
+              ]
+                ++ rest
+            _ -> error "impossible"
+          headItems = maybe wildcards id maybeHeadItems
+       in case checkUsefulness (types ++ tailTypes) (map expander remainingPats) (headItems ++ tailExamined) of
+            Nothing -> Nothing
+            Just witnesses ->
+              let (fieldWitnesses, rest) = splitAt (length types) witnesses
+               in Just $ WRecord (zip names fieldWitnesses) : rest
+
+    -- maybeHeadItems is what the examined pattern holds in place of the constructor's argument
+    setupTConCall typeArgs desiredConstr@(ConstructorInfo _ _ _ params declaredArgs _) maybeHeadItems =
       let -- the declared arg types mention the type's params (e.g. 'a),
           -- so replace them with this match's actual type args
           args = map (substParams (zip params typeArgs)) declaredArgs
@@ -392,7 +409,7 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
             item : [] -> [item]
             lst -> [TTuple lst]
           desiredWildcards = map TPWildcard desiredTp
-          expander = \(pat : rest) -> case pat of
+          expander = \(pat : rest) -> case flattenPat pat of
             TPWildcard _ -> [desiredWildcards ++ rest]
             TPVariable _ _ -> [desiredWildcards ++ rest]
             TPConstant _ (TConstVariant info) | info == desiredConstr -> [rest]
@@ -400,7 +417,7 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
             _ -> []
           expandedPats = concatMap expander remainingPats
           expandedTypes = desiredTp ++ tailTypes
-          expandedExamined = desiredWildcards ++ tailExamined
+          expandedExamined = maybe desiredWildcards id maybeHeadItems ++ tailExamined
        in checkUsefulness expandedTypes expandedPats expandedExamined
 
     extractConstr = \pat -> case pat of
@@ -408,6 +425,32 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
       TPVariant _ constrRef _ -> [constrRef]
       _ -> []
     headConstrs = concatMap extractConstr heads
+
+-- the types of a record's fields, in declaration order, for the given type arguments
+recordTypes :: [Type] -> FieldInfo -> [Type]
+recordTypes typeArgs info = map (substParams (zip (fieldParams info) typeArgs)) (recordFieldTypes info)
+
+-- the patterns a record pattern gives, by field name
+givenFields :: [(Path, TPattern Type)] -> [(String, TPattern Type)]
+givenFields given = [(name, p) | (Path _ name, p) <- given]
+
+-- extracts a constructor's witness from the witnesses of its argument columns
+wrapConstructor :: ConstructorInfo -> [Witness] -> [Witness]
+wrapConstructor (ConstructorInfo name _ _ _ args _) witnesses = case (args, witnesses) of
+  ([], _) -> WCon name Nothing : witnesses
+  -- args is nonempty, so we either have an item, or a TTuple of our args
+  (_, w : rest) -> WCon name (Just w) : rest
+  _ -> error "impossible"
+
+-- returns the indices of the cases that can never match, by position, because the unguarded cases
+-- above them already match everything they would
+uselessCases :: Type -> [TCase Type] -> [Int]
+uselessCases matchedTp cases_ =
+  [ i
+  | (i, TCase pat _ _) <- zip [0 ..] cases_,
+    let earlier = [[flattenPat p] | TCase p Nothing _ <- take i cases_],
+    isNothing (checkUsefulness [matchedTp] earlier [flattenPat pat])
+  ]
 
 substParams :: [(TypeVar, Type)] -> Type -> Type
 substParams repl tp = case tp of

@@ -95,7 +95,9 @@ data FieldInfo = FieldInfo
     fieldType :: Type,
     fieldRecord :: Type,
     fieldIsMutable :: Bool,
-    recordFields :: [String]
+    recordFields :: [String],
+    -- the type of each of recordFields, in the same order (in terms of fieldParams)
+    recordFieldTypes :: [Type]
   }
   deriving (Show, Eq)
 
