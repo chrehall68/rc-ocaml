@@ -3,8 +3,6 @@ module Intermediate.SymbolTable
     ConstructorInfo (..),
     TypeInfo (..),
     Sibling (..),
-    ConstructorRef (..),
-    constructorRef,
     builtinConstructor,
     variantConstructors,
     FieldInfo (..),
@@ -60,17 +58,6 @@ data Sibling = Sibling
     siblingHasArgument :: Bool
   }
   deriving (Show, Eq)
-
--- which constructor a typed ast node refers to
-data ConstructorRef = ConstructorRef
-  { refName :: String, -- name of the constructor
-    refTag :: Int, -- tag of the constructor
-    refSiblings :: [Sibling] -- all siblings
-  }
-  deriving (Show, Eq)
-
-constructorRef :: ConstructorInfo -> ConstructorRef
-constructorRef info = ConstructorRef (constructorName info) (constructorTag info) (constructorSiblings info)
 
 -- one of the predefined constructors (None, Some, [], ::), for code the compiler
 -- generates itself. these are looked up in the initial scope, so a user redefining

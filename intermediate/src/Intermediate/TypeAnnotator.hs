@@ -83,7 +83,7 @@ constantConstructor path = do
   (args, result) <- instantiateConstructor info
   -- double check that it is a 0-arg constructor
   case args of
-    [] -> return (TConstVariant (SymTab.constructorRef info), result)
+    [] -> return (TConstVariant info, result)
     expected -> throwError $ "constructor " ++ show path ++ " expects " ++ show expected ++ " as an argument, but was called without any arguments"
 
 typeConstant :: TConstant -> LowerAndInferM Type
@@ -194,12 +194,12 @@ applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
               (Nothing, Just expr) -> do
                 typedExpr <- lowerExpr expr
                 unifyOrRollback lhs (TCon (builtinTypeName "option") [exprAnnotation typedExpr])
-                let wrapped = TEVariant lhs (SymTab.constructorRef (SymTab.builtinConstructor "Some")) typedExpr
+                let wrapped = TEVariant lhs (SymTab.builtinConstructor "Some") typedExpr
                 applyTyped rhs wrapped (unlabeled, Data.Map.delete name labeled, optional)
               (Nothing, Nothing)
                 | not (null unlabeled) -> do
                     -- a positional argument follows, so the optional is defaulted
-                    let none = TEConstant lhs (TConstVariant (SymTab.constructorRef (SymTab.builtinConstructor "None")))
+                    let none = TEConstant lhs (TConstVariant (SymTab.builtinConstructor "None"))
                     applyTyped rhs none args
                 | otherwise -> etaExpand label lhs rhs
     -- we don't know anything about the function (e.g. a lambda parameter),
@@ -230,7 +230,7 @@ applyConstructor constr typedArg = do
     [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
     arg : [] -> unifyOrRollback arg (exprAnnotation typedArg)
     args -> unifyOrRollback (TTuple args) (exprAnnotation typedArg)
-  return $ TEVariant constrResult (SymTab.constructorRef constrInfo) typedArg
+  return $ TEVariant constrResult constrInfo typedArg
 
 -- same, but for a constructor in a pattern
 applyConstructorPattern :: Ast.Path -> TPattern Type -> LowerAndInferM (TPattern Type)
@@ -242,7 +242,7 @@ applyConstructorPattern constr typedInner = do
     [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
     arg : [] -> unifyOrRollback arg (patternAnnotation typedInner)
     args -> unifyOrRollback (TTuple args) (patternAnnotation typedInner)
-  return $ TPVariant constrResult (SymTab.constructorRef constrInfo) typedInner
+  return $ TPVariant constrResult constrInfo typedInner
 
 -- similar to constructors, but for polymorphic records
 -- returns what we know about the field, the record's type, and the field's type

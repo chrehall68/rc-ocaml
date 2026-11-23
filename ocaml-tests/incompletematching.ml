@@ -36,3 +36,9 @@ match x with
 let f ~a ~b ?(c=3) x ~d y = a+b+c+d+x+y;;
 
 let x = f 4 ~a:3 ~c:5
+
+let x = Some 3;;
+match x with
+Some 0 -> ()
+| None -> ()
+;;

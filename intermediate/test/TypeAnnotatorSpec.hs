@@ -303,12 +303,12 @@ spec = do
       TProgram defs <- either fail return (infer "let r = []")
       case defs of
         [TDefinitionLet _ [TLetBinding _ (TEConstant _ c)]] ->
-          fmap SymTab.refName (case c of TConstVariant r -> Just r; _ -> Nothing) `shouldBe` Just "[]"
+          fmap SymTab.constructorName (case c of TConstVariant r -> Just r; _ -> Nothing) `shouldBe` Just "[]"
         _ -> expectationFailure "unexpected shape"
     it "lowers :: to a variant applied to a tuple" $ do
       TProgram defs <- either fail return (infer "let r = 1 :: []")
       case defs of
-        [TDefinitionLet _ [TLetBinding _ (TEVariant _ ref (TETuple {}))]] -> SymTab.refName ref `shouldBe` "::"
+        [TDefinitionLet _ [TLetBinding _ (TEVariant _ ref (TETuple {}))]] -> SymTab.constructorName ref `shouldBe` "::"
         _ -> expectationFailure "unexpected shape"
     it "types list literals" $
       typeOf "r" "let r = [1; 2; 3]" `shouldBe` Right (TCon "list" [TInt])
@@ -526,7 +526,7 @@ spec = do
             TPConstant _ (TConstVariant ref) -> [ref]
             TPVariant _ ref _ -> [ref]
             _ -> []
-      map SymTab.refName refs `shouldBe` ["B", "A", "B", "C"]
-      map SymTab.refTag refs `shouldBe` [1, 0, 1, 2]
+      map SymTab.constructorName refs `shouldBe` ["B", "A", "B", "C"]
+      map SymTab.constructorTag refs `shouldBe` [1, 0, 1, 2]
       -- every one of them knows about all three constructors
-      map (map siblingName . SymTab.refSiblings) refs `shouldBe` replicate 4 ["A", "B", "C"]
+      map (map siblingName . SymTab.constructorSiblings) refs `shouldBe` replicate 4 ["A", "B", "C"]
