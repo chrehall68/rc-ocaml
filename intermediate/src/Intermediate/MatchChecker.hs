@@ -19,6 +19,7 @@ data Witness
   | WDouble Double
   | WChar Char
   | WString String
+  | WTuple [Witness]
   deriving (Show, Eq)
 
 data MatchError = MatchError
@@ -38,6 +39,7 @@ renderWitness witness = case witness of
   WDouble d -> renderOCamlFloat d
   WChar c -> "'" ++ concatMap (escapeOCamlChar '\'') [c] ++ "'"
   WString s -> "\"" ++ concatMap (escapeOCamlChar '"') s ++ "\""
+  WTuple args -> "(" ++ (intercalate ", " $ map renderWitness args) ++ ")"
 
 -- ocaml prints floats with a trailing "." instead of ".0", e.g. "0." or "1.5"
 renderOCamlFloat :: Double -> String
@@ -212,6 +214,26 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
         TArrow _ _ _ ->
           -- everything should be a wildcard, so just recurse
           checkUsefulness tailTypes (map tail remainingPats) tailExamined
+        TTuple types ->
+          -- expand the tuple and update all things
+          let wildcards = map (\tp -> TPWildcard tp) types
+              expander = \(pat : rest) -> case pat of
+                TPWildcard _ ->
+                  -- gets expanded into a bunch  of _'s
+                  wildcards ++ rest
+                TPVariable _ _ ->
+                  -- similar thing here
+                  wildcards ++ rest
+                TPTuple _ pats ->
+                  pats ++ rest
+                _ -> error "impossible"
+              expanded = map expander remainingPats
+              expandedTypes = types ++ tailTypes
+           in case checkUsefulness expandedTypes expanded (wildcards ++ tailExamined) of
+                Nothing -> Nothing
+                Just witnesses ->
+                  let (tupleArgs, rest) = splitAt (length types) witnesses
+                   in Just $ WTuple tupleArgs : rest
         _ -> Nothing
   | otherwise =
       -- is a constructed thing
@@ -252,6 +274,27 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
                 _ -> False
            in checkUsefulness tailTypes nextPats tailExamined
         TArrow _ _ _ -> error "arrows should always be wildcards"
+        TTuple types ->
+          -- expand the tuple and update all things
+          let wildcards = map (\tp -> TPWildcard tp) types
+              expander = \(pat : rest) -> case pat of
+                TPWildcard _ ->
+                  -- gets expanded into a bunch  of _'s
+                  wildcards ++ rest
+                TPVariable _ _ ->
+                  -- similar thing here
+                  wildcards ++ rest
+                TPTuple _ pats ->
+                  pats ++ rest
+                _ -> error "impossible"
+              expanded = map expander remainingPats
+              expandedTypes = types ++ tailTypes
+              TPTuple _ headItems = headExamined
+           in case checkUsefulness expandedTypes expanded (headItems ++ tailExamined) of
+                Nothing -> Nothing
+                Just witnesses ->
+                  let (tupleArgs, rest) = splitAt (length types) witnesses
+                   in Just $ WTuple tupleArgs : rest
         _ -> Nothing
   where
     -- automatically includes wildcards

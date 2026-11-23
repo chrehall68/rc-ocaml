@@ -26,6 +26,13 @@ match x with
 | "a" -> print_endline "hi there"
 | v when v == x -> print_endline "there";;
 
+let x = (true,false,22);;
+match x with
+(true,_,_)->()
+| (_, true, 0) ->()
+| (false, _, 1) -> ()
+
+
 let f ~a ~b ?(c=3) x ~d y = a+b+c+d+x+y;;
 
 let x = f 4 ~a:3 ~c:5

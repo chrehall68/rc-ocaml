@@ -76,6 +76,41 @@ spec = do
       accepted $
         check "let u = ();; match u with | () -> ()"
 
+  describe "tuples" $ do
+    it "accepts every combination of bools" $
+      accepted $
+        check "let t = (true, false);; match t with | (true, _) -> () | (false, true) -> () | (false, false) -> ()"
+    it "accepts a wildcard tuple" $
+      accepted $
+        check "let t = (true, 1);; match t with | (_, _) -> ()"
+    it "accepts a variable catch-all" $
+      accepted $
+        check "let t = (true, 1);; match t with | p -> ()"
+    it "accepts overlapping rows that together cover everything" $
+      accepted $
+        check "let t = (true, 1);; match t with | (true, _) -> () | (_, 0) -> () | (false, n) -> ()"
+    it "reports a missing combination" $
+      rejectedWith ["not matched: (false, false)"] $
+        check "let t = (true, false);; match t with | (true, _) -> () | (false, true) -> ()"
+    it "reports a missing column value when the other column is an int" $
+      rejectedWith ["not matched: (true, 1)"] $
+        check "let t = (true, 1);; match t with | (false, _) -> () | (_, 0) -> ()"
+    it "checks triples" $
+      rejectedWith ["not matched: (false, false, 0)"] $
+        check "let t = (true, false, 22);; match t with | (true, _, _) -> () | (_, true, 0) -> () | (false, _, 1) -> ()"
+    it "accepts nested tuples" $
+      accepted $
+        check "let t = ((true, false), 1);; match t with | ((true, _), _) -> () | ((false, _), 0) -> () | (_, _) -> ()"
+    it "reports a missing nested tuple" $
+      rejectedWith ["not matched: ((false, _), _)"] $
+        check "let t = ((true, false), 1);; match t with | ((true, _), _) -> ()"
+    it "does not let a guarded tuple clause make a match exhaustive" $
+      rejectedWith [guardNote] $
+        check "let t = (true, false);; match t with | (_, _) when true -> ()"
+    it "checks tuple matches inside function bodies" $
+      rejectedWith ["not matched: (true, false)"] $
+        check "let g a b = match (a, b) with | (true, true) -> 1 | (false, false) -> 2"
+
   describe "guards" $ do
     it "does not let a guarded clause make a match exhaustive" $
       rejectedWith [] $
