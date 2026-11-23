@@ -2,8 +2,8 @@ module Intermediate.MatchChecker where
 
 import Data.Either (partitionEithers)
 import Data.List (find, intercalate)
-import qualified Data.List.NonEmpty
-import Data.Maybe (isNothing)
+import qualified Data.List.NonEmpty as NE
+import Data.Maybe (isJust)
 import Frontend.Tokens (IntLiteral (..))
 import Intermediate.Type (Type (..))
 import Intermediate.TypedAst
@@ -99,7 +99,7 @@ checkExpr expr = case expr of
   TEVar _ _ -> return ()
   TEVariant _ _ inner -> checkExpr inner
   TETuple _ e1 e2 rest -> collectErrors $ map checkExpr (e1 : e2 : rest)
-  TEArray _ exprs -> collectErrors $ map checkExpr $ Data.List.NonEmpty.toList exprs
+  TEArray _ exprs -> collectErrors $ map checkExpr $ NE.toList exprs
   TERecord _ (Just source) rest -> collectErrors $ map checkExpr $ source : (map snd rest)
   TERecord _ _ rest -> collectErrors $ map checkExpr $ map snd rest
   TEApply _ fn arg -> collectErrors $ map checkExpr [fn, arg]
@@ -125,78 +125,168 @@ caseExprs = concatMap (\(TCase _ guard body) -> maybe id (:) guard [body])
 -- remember that they exist so the error can mention them
 checkCases :: Type -> [TCase Type] -> Check
 checkCases matchedTp cases_ =
-  let unguarded = filter (\(TCase _ guard _) -> isNothing guard) cases_
+  let unguarded =
+        concatMap
+          ( \(TCase pat guard _) ->
+              case guard of
+                Nothing -> [[flattenPat pat]]
+                _ -> []
+          )
+          cases_
       hasGuards = length unguarded /= length cases_
-   in case checkCasesInner matchedTp unguarded of
+   in case checkUsefulness [matchedTp] unguarded [TPWildcard matchedTp] of
         Nothing -> return ()
-        Just w -> Left [MatchError w hasGuards]
+        Just (w : []) -> Left [MatchError w hasGuards]
+        Just _ -> error "impossible"
 
-lookForPat :: [TCase Type] -> (TPattern Type -> Bool) -> Bool
-lookForPat cases_ f = any (\(TCase pat _ _) -> any f (flattenPat pat)) cases_
+findUncoveredConstant :: [TPattern Type] -> [t] -> (t -> TPattern Type -> Bool) -> Maybe t
+findUncoveredConstant patterns constantSpan isMatchedBy =
+  find (\constant -> not $ any (isMatchedBy constant) patterns) constantSpan
 
 -- reduce a pattern to the alternatives it is made of
 -- TODO: expand or-patterns here once they exist in the typed ast
-flattenPat :: TPattern Type -> [TPattern Type]
+flattenPat :: TPattern Type -> TPattern Type
 flattenPat pat = case pat of
   TPAlias _ inner _ -> flattenPat inner
-  _ -> [pat]
+  _ -> pat
 
--- type that we're matching, unguarded cases
--- returns Just (example of an unmatched value), or Nothing if exhaustive
-checkCasesInner :: Type -> [TCase Type] -> Maybe Witness
-checkCasesInner matchedTyped cases_ =
-  case matchedTyped of
-    TUnit -> Nothing -- always ok
-    TInt
-      | hasCatchall -> Nothing
-      | otherwise ->
-          -- find a missing number
-          -- guaranteed to eventually terminate since no one can write out all integers
-          let used x = lookForPat cases_ $ \pat -> case pat of
+isWildcard :: TPattern Type -> Bool
+isWildcard pat = case flattenPat pat of
+  TPWildcard _ -> True
+  TPVariable _ _ -> True
+  _ -> False
+
+-- based on the find usefulness algorithm and the exhaustiveness check adaptation of it
+-- https://www.cambridge.org/core/journals/journal-of-functional-programming/article/warnings-for-pattern-matching/3165B75113781E2431E3856972940347
+-- types that need to be matched, patterns still available to do that matching, our pattern
+-- witness is Just if useful, Nothing if not usefull
+checkUsefulness :: [Type] -> [[TPattern Type]] -> [TPattern Type] -> Maybe [Witness]
+-- no more types to narrow
+checkUsefulness remainingTypes [] _ =
+  -- no pats made it this far, so we successfully found a witness already.
+  -- so, we can just fill the rest with wildcards since they don't matter
+  Just $ map (const WAny) remainingTypes
+checkUsefulness [] _ _ = Nothing
+checkUsefulness (_ : _) (_ : _) [] = error "impossible"
+-- have more remaining patterns and more remaining types to narrow
+checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamined)
+  | isWildcard headExamined =
+      -- is a wildcard, so look at the concrete constructors currently captured
+      -- and then branch off of whether the concrete constructors spans the space
+      case headType of
+        TUnit ->
+          -- should be everything
+          checkUsefulness tailTypes (map tail remainingPats) tailExamined
+        TInt ->
+          -- should be some concrete constructor that doesn't exist here
+          -- find that constructor
+          let space = [0 ..]
+              valueExtracter = \pat -> case pat of
+                TPConstant _ (TConstInt (IntLiteral v _)) -> Just v
+                _ -> Nothing
+           in wildcardAction space valueExtracter WInt
+        TBool ->
+          let space = [True, False]
+              valueExtracter = \pat -> case pat of
+                TPConstant _ (TConstBool v) -> Just v
+                _ -> Nothing
+           in wildcardAction space valueExtracter WBool
+        TFloat ->
+          let space = [0 ..]
+              valueExtracter = \pat -> case pat of
+                TPConstant _ (TConstDouble v) -> Just v
+                _ -> Nothing
+           in wildcardAction space valueExtracter WDouble
+        TChar ->
+          let space = ['\0' .. '\255']
+              valueExtracter = \pat -> case pat of
+                TPConstant _ (TConstChar v) -> Just v
+                _ -> Nothing
+           in wildcardAction space valueExtracter WChar
+        TString ->
+          let space = map (\x -> replicate x 'a') [0 ..]
+              valueExtracter = \pat -> case pat of
+                TPConstant _ (TConstString v) -> Just v
+                _ -> Nothing
+           in wildcardAction space valueExtracter WString
+        TArrow _ _ _ ->
+          -- everything should be a wildcard, so just recurse
+          checkUsefulness tailTypes (map tail remainingPats) tailExamined
+        _ -> Nothing
+  | otherwise =
+      -- is a constructed thing
+      -- so expand cur type, if possible, and continue matching
+      -- on anything that also matches what we match
+      case headType of
+        TUnit ->
+          -- should be everything
+          checkUsefulness tailTypes (map tail remainingPats) tailExamined
+        TInt ->
+          let (TPConstant _ (TConstInt (IntLiteral x _))) = headExamined
+              nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstInt (IntLiteral v _)) -> v == x
                 _ -> False
-           in Just $ WInt $ until (not . used) (+ 1) 0
-    TBool
-      | not (matches True) -> Just (WBool True)
-      | not (matches False) -> Just (WBool False)
-      | otherwise -> Nothing
-    TFloat
-      | hasCatchall -> Nothing
-      | otherwise ->
-          -- same argument as ints here
-          let used x = lookForPat cases_ $ \pat -> case pat of
+           in checkUsefulness tailTypes nextPats tailExamined
+        TBool ->
+          let (TPConstant _ (TConstBool x)) = headExamined
+              nextPats = takeMatchingRests $ \pat -> case pat of
+                TPConstant _ (TConstBool v) -> v == x
+                _ -> False
+           in checkUsefulness tailTypes nextPats tailExamined
+        TFloat ->
+          let (TPConstant _ (TConstDouble x)) = headExamined
+              nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstDouble v) -> v == x
                 _ -> False
-           in Just $ WDouble $ until (not . used) (+ 1.0) 0.0
-    TChar
-      | hasCatchall -> Nothing
-      | otherwise ->
-          -- ocaml chars are single bytes, so all 256 can be written out
-          let used x = lookForPat cases_ $ \pat -> case pat of
+           in checkUsefulness tailTypes nextPats tailExamined
+        TChar ->
+          let (TPConstant _ (TConstChar x)) = headExamined
+              nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstChar v) -> v == x
                 _ -> False
-           in case find (not . used) ['\0' .. '\255'] of
-                Just v -> Just $ WChar v
-                Nothing -> Nothing
-    TString
-      | hasCatchall -> Nothing
-      | otherwise ->
-          -- can't write out every string
-          let used x = lookForPat cases_ $ \pat -> case pat of
+           in checkUsefulness tailTypes nextPats tailExamined
+        TString ->
+          let (TPConstant _ (TConstString x)) = headExamined
+              nextPats = takeMatchingRests $ \pat -> case pat of
                 TPConstant _ (TConstString v) -> v == x
                 _ -> False
-           in Just $ WString $ until (not . used) ('a' :) ""
-    _ -> Nothing
+           in checkUsefulness tailTypes nextPats tailExamined
+        TArrow _ _ _ -> error "arrows should always be wildcards"
+        _ -> Nothing
   where
-    hasCatchall = lookForPat cases_ $ \pat -> case pat of
-      TPWildcard _ -> True
-      TPVariable _ _ -> True
-      _ -> False
-    matches b =
-      hasCatchall
-        || lookForPat
-          cases_
-          ( \pat -> case pat of
-              TPConstant _ (TConstBool b') -> b == b'
-              _ -> False
-          )
+    -- automatically includes wildcards
+    takeMatchingRests f =
+      concatMap
+        ( \(rawPat : rest) ->
+            let pat = flattenPat rawPat
+             in if f pat
+                  then [rest]
+                  else case pat of
+                    TPWildcard _ -> [rest]
+                    TPVariable _ _ -> [rest]
+                    _ -> []
+        )
+        remainingPats
+    wildcardPats = takeMatchingRests (const False)
+    heads = map (flattenPat . head) remainingPats
+    wildcardAction space valueExtracter witnessConstr =
+      let isMatching desired = \pat -> case valueExtracter pat of
+            Just v -> v == desired
+            Nothing -> False
+          maybeMissing = findUncoveredConstant heads space isMatching
+       in case maybeMissing of
+            -- the constant constructors don't cover the full span
+            -- as such, instantiate current wildcard with that, and recurse on the remaining wildcards
+            Just missing -> do
+              result <- checkUsefulness tailTypes wildcardPats tailExamined
+              return $ witnessConstr missing : result
+            Nothing ->
+              -- all constant constructors are covered, so just exhaustively check
+              -- if instantiating self as one of those would result in a witness
+              let extracter desired = takeMatchingRests (isMatching desired)
+               in case find (isJust . snd) $ map (\x -> (x, checkUsefulness tailTypes (extracter x) tailExamined)) space of
+                    Just (x, Just witness) ->
+                      -- found a witness that makes this pattern useful
+                      Just $ witnessConstr x : witness
+                    Just _ -> error "impossible"
+                    Nothing -> Nothing -- not useful

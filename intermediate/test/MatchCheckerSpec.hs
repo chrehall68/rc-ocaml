@@ -30,50 +30,66 @@ spec :: Spec
 spec = do
   describe "ints" $ do
     it "accepts a wildcard" $
-      accepted $ check "let x = 1;; match x with | 1 -> () | _ -> ()"
+      accepted $
+        check "let x = 1;; match x with | 1 -> () | _ -> ()"
     it "accepts a variable catch-all" $
-      accepted $ check "let x = 1;; match x with | 1 -> () | y -> ()"
+      accepted $
+        check "let x = 1;; match x with | 1 -> () | y -> ()"
     it "accepts an alias of a catch-all" $
-      accepted $ check "let x = 1;; match x with | (_ as y) -> ()"
+      accepted $
+        check "let x = 1;; match x with | (_ as y) -> ()"
     it "reports the smallest missing non-negative int" $
-      rejectedWith ["not matched: 1"] $ check "let x = 1;; match x with | 0 -> ()"
+      rejectedWith ["not matched: 1"] $
+        check "let x = 1;; match x with | 0 -> ()"
     it "skips ints that are already covered" $
-      rejectedWith ["not matched: 3"] $ check "let x = 1;; match x with | 0 -> () | 1 -> () | 2 -> ()"
+      rejectedWith ["not matched: 3"] $
+        check "let x = 1;; match x with | 0 -> () | 1 -> () | 2 -> ()"
 
   describe "bools" $ do
     it "accepts true and false" $
-      accepted $ check "let b = true;; match b with | true -> () | false -> ()"
+      accepted $
+        check "let b = true;; match b with | true -> () | false -> ()"
     it "accepts a wildcard" $
-      accepted $ check "let b = true;; match b with | true -> () | _ -> ()"
+      accepted $
+        check "let b = true;; match b with | true -> () | _ -> ()"
     it "reports a missing false" $
-      rejectedWith ["not matched: false"] $ check "let b = true;; match b with | true -> ()"
+      rejectedWith ["not matched: false"] $
+        check "let b = true;; match b with | true -> ()"
     it "reports a missing true" $
-      rejectedWith ["not matched: true"] $ check "let b = true;; match b with | false -> ()"
+      rejectedWith ["not matched: true"] $
+        check "let b = true;; match b with | false -> ()"
 
   describe "other constants" $ do
     it "accepts a catch-all on chars" $
-      accepted $ check "let c = 'a';; match c with | 'a' -> () | _ -> ()"
+      accepted $
+        check "let c = 'a';; match c with | 'a' -> () | _ -> ()"
     it "reports a missing char, escaped like ocaml" $
-      rejectedWith ["not matched: '\\000'"] $ check "let c = 'a';; match c with | 'a' -> ()"
+      rejectedWith ["not matched: '\\000'"] $
+        check "let c = 'a';; match c with | 'a' -> ()"
     it "reports a missing float with a trailing dot" $
-      rejectedWith ["not matched: 1."] $ check "let f = 1.0;; match f with | 0.0 -> ()"
+      rejectedWith ["not matched: 1."] $
+        check "let f = 1.0;; match f with | 0.0 -> ()"
     it "reports the shortest missing string" $
       rejectedWith ["not matched: \"aa\""] $
         check "let s = \"a\";; match s with | \"\" -> () | \"a\" -> () | \"hi\" -> ()"
     it "accepts unit" $
-      accepted $ check "let u = ();; match u with | () -> ()"
+      accepted $
+        check "let u = ();; match u with | () -> ()"
 
   describe "guards" $ do
     it "does not let a guarded clause make a match exhaustive" $
-      rejectedWith [] $ check "let x = 1;; match x with | 1 -> () | y when y == 2 -> ()"
+      rejectedWith [] $
+        check "let x = 1;; match x with | 1 -> () | y when y == 2 -> ()"
     it "mentions guarded clauses in the error" $
-      rejectedWith [guardNote] $ check "let x = 1;; match x with | 1 -> () | y when y == 2 -> ()"
+      rejectedWith [guardNote] $
+        check "let x = 1;; match x with | 1 -> () | y when y == 2 -> ()"
     it "does not mention guards when there are none" $
       case check "let x = 1;; match x with | 1 -> ()" of
         Left msg -> msg `shouldNotSatisfy` (guardNote `isInfixOf`)
         Right () -> expectationFailure "expected an error"
     it "accepts when an unguarded clause covers everything" $
-      accepted $ check "let x = 1;; match x with | y when y == 2 -> () | _ -> ()"
+      accepted $
+        check "let x = 1;; match x with | y when y == 2 -> () | _ -> ()"
 
   describe "nesting" $ do
     it "checks matches inside other expressions" $
@@ -89,4 +105,5 @@ spec = do
           msg `shouldSatisfy` ("not matched: true" `isInfixOf`)
         Right () -> expectationFailure "expected errors"
     it "checks the cases of a function" $
-      rejectedWith ["not matched: false"] $ check "let f = function | true -> 1"
+      rejectedWith ["not matched: false"] $
+        check "let f = function | true -> 1"
