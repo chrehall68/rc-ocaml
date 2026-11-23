@@ -43,8 +43,16 @@ renderWitness witness = case witness of
   WChar c -> "'" ++ concatMap (escapeOCamlChar '\'') [c] ++ "'"
   WString s -> "\"" ++ concatMap (escapeOCamlChar '"') s ++ "\""
   WTuple args -> "(" ++ (intercalate ", " $ map renderWitness args) ++ ")"
+  WCon "::" (Just (WTuple [hd, tl])) -> renderOperand hd ++ " :: " ++ renderOperand tl
+  WCon "::" (Just WAny) -> "_ :: _"
   WCon name Nothing -> name
-  WCon name (Just arg) -> name ++ " " ++ renderWitness arg
+  WCon name (Just arg) -> name ++ " " ++ renderOperand arg
+
+-- parenthesize witnesses that would otherwise be ambiguous as an argument
+renderOperand :: Witness -> String
+renderOperand w = case w of
+  WCon _ (Just _) -> "(" ++ renderWitness w ++ ")"
+  _ -> renderWitness w
 
 -- ocaml prints floats with a trailing "." instead of ".0", e.g. "0." or "1.5"
 renderOCamlFloat :: Double -> String
@@ -221,84 +229,41 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
           checkUsefulness tailTypes (map tail remainingPats) tailExamined
         TTuple types ->
           -- expand the tuple and update all things
-          let wildcards = map (\tp -> TPWildcard tp) types
-              expander = \(pat : rest) -> case pat of
-                TPWildcard _ ->
-                  -- gets expanded into a bunch  of _'s
-                  wildcards ++ rest
-                TPVariable _ _ ->
-                  -- similar thing here
-                  wildcards ++ rest
-                TPTuple _ pats ->
-                  pats ++ rest
-                _ -> error "impossible"
-              expanded = map expander remainingPats
-              expandedTypes = types ++ tailTypes
-           in case checkUsefulness expandedTypes expanded (wildcards ++ tailExamined) of
-                Nothing -> Nothing
-                Just witnesses ->
-                  let (tupleArgs, rest) = splitAt (length types) witnesses
-                   in Just $ WTuple tupleArgs : rest
-        TCon tname typeArgs ->
-          let extractConstr = \pat -> case pat of
-                TPConstant _ (TConstVariant constrRef) -> [constrRef]
-                TPVariant _ constrRef _ -> [constrRef]
-                _ -> []
-              constrs = concatMap extractConstr heads
-           in case constrs of
-                [] -> do
-                  -- we know we had at least one pattern to us
-                  -- but the fact that we have no constructors means everything is a wildcard
-                  -- so it doesn't matter what we instantiate this as, we just skip ahead
-                  result <- checkUsefulness tailTypes remainingPats tailExamined
-                  return $ WAny : result
-                (ConstructorInfo _ _ siblings _ _ _) : _ ->
-                  -- we have a constructor ref
-                  -- time to see if we span the space
-                  let haveNames = map (\(ConstructorInfo name _ _ _ _ _) -> name) constrs
-                      maybeMissing = find (\(Sibling name _) -> not $ any (\s -> s == name) haveNames) siblings
-                   in case maybeMissing of
-                        Nothing ->
-                          -- we span the space, so try instantiating as any one of the constructors
-                          let uniqueConstrs = trace ("evaluating " ++ show (nub constrs)) nub constrs
-                              setupCall desiredConstr@(ConstructorInfo _ _ _ params declaredArgs _) =
-                                let -- the declared arg types mention the type's params (e.g. 'a),
-                                    -- so replace them with this match's actual type args
-                                    args = map (substParams (zip params typeArgs)) declaredArgs
-                                    desiredTp = case args of
-                                      [] -> []
-                                      item : [] -> [item]
-                                      lst -> [TTuple lst]
-                                    desiredWildcards = map TPWildcard desiredTp
-                                    expander = \(pat : rest) -> case pat of
-                                      TPWildcard _ -> [desiredWildcards ++ rest]
-                                      TPVariable _ _ -> [desiredWildcards ++ rest]
-                                      TPConstant _ (TConstVariant info) | info == desiredConstr -> [rest]
-                                      TPVariant _ info innerPat | info == desiredConstr -> [innerPat : rest]
-                                      _ -> []
-                                    expandedPats = concatMap expander remainingPats
-                                    expandedTypes = desiredTp ++ tailTypes
-                                    expandedExamined = desiredWildcards ++ tailExamined
-                                 in checkUsefulness expandedTypes expandedPats expandedExamined
-                           in case find (isJust . snd) $ map (\constr -> (constr, setupCall constr)) uniqueConstrs of
-                                Just ((ConstructorInfo name _ _ _ args _), (Just witnesses)) ->
-                                  case args of
-                                    [] -> return $ WCon name Nothing : witnesses
-                                    _ : [] -> return $ WCon name (Just $ head witnesses) : tail witnesses
-                                    _ ->
-                                      let (constrArgs, rest) = splitAt (length args) witnesses
-                                       in return $ WCon name (Just $ WTuple constrArgs) : rest
-                                Just _ -> error "impossible"
-                                Nothing -> Nothing
-                        Just (Sibling name hasArgument) -> do
-                          -- we don't span the space
-                          -- instantiate as that missing
-                          result <- checkUsefulness tailTypes wildcardPats tailExamined
-                          if hasArgument
-                            then
-                              return $ WCon name (Just WAny) : result
-                            else
-                              return $ WCon name Nothing : result
+          tupleAction types Nothing
+        TCon _ typeArgs ->
+          case headConstrs of
+            [] -> do
+              -- we know we had at least one pattern to us
+              -- but the fact that we have no constructors means everything is a wildcard
+              -- so it doesn't matter what we instantiate this as, we just skip ahead
+              result <- checkUsefulness tailTypes remainingPats tailExamined
+              return $ WAny : result
+            (ConstructorInfo _ _ siblings _ _ _) : _ ->
+              -- we have a constructor ref
+              -- time to see if we span the space
+              let haveNames = map (\(ConstructorInfo name _ _ _ _ _) -> name) headConstrs
+                  maybeMissing = find (\(Sibling name _) -> not $ any (\s -> s == name) haveNames) siblings
+               in case maybeMissing of
+                    Nothing ->
+                      -- we span the space, so try instantiating as any one of the constructors
+                      let uniqueConstrs = nub headConstrs
+                       in case find (isJust . snd) $ map (\constr -> (constr, setupTConCall typeArgs constr)) uniqueConstrs of
+                            Just ((ConstructorInfo name _ _ _ args _), (Just witnesses)) ->
+                              case args of
+                                [] -> return $ WCon name Nothing : witnesses
+                                -- several args were expanded as one tuple type, so they are one witness
+                                _ -> return $ WCon name (Just $ head witnesses) : tail witnesses
+                            Just _ -> error "impossible"
+                            Nothing -> Nothing
+                    Just (Sibling name hasArgument) -> do
+                      -- we don't span the space
+                      -- instantiate as that missing
+                      result <- checkUsefulness tailTypes wildcardPats tailExamined
+                      if hasArgument
+                        then
+                          return $ WCon name (Just WAny) : result
+                        else
+                          return $ WCon name Nothing : result
         _ -> Nothing
   | otherwise =
       -- is a constructed thing
@@ -341,25 +306,15 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
         TArrow _ _ _ -> error "arrows should always be wildcards"
         TTuple types ->
           -- expand the tuple and update all things
-          let wildcards = map (\tp -> TPWildcard tp) types
-              expander = \(pat : rest) -> case pat of
-                TPWildcard _ ->
-                  -- gets expanded into a bunch  of _'s
-                  wildcards ++ rest
-                TPVariable _ _ ->
-                  -- similar thing here
-                  wildcards ++ rest
-                TPTuple _ pats ->
-                  pats ++ rest
+          let TPTuple _ headItems = headExamined
+           in tupleAction types (Just headItems)
+        TCon _ typeArgs ->
+          -- need to expand
+          let constrInfo = case headExamined of
+                TPVariant _ info _ -> info
+                TPConstant _ (TConstVariant info) -> info
                 _ -> error "impossible"
-              expanded = map expander remainingPats
-              expandedTypes = types ++ tailTypes
-              TPTuple _ headItems = headExamined
-           in case checkUsefulness expandedTypes expanded (headItems ++ tailExamined) of
-                Nothing -> Nothing
-                Just witnesses ->
-                  let (tupleArgs, rest) = splitAt (length types) witnesses
-                   in Just $ WTuple tupleArgs : rest
+           in setupTConCall typeArgs constrInfo
         _ -> Nothing
   where
     -- automatically includes wildcards
@@ -399,6 +354,54 @@ checkUsefulness (headType : tailTypes) remainingPats (headExamined : tailExamine
                     Just _ -> error "impossible"
                     Nothing -> Nothing -- not useful
                     -- replaces type params with the given types
+    tupleAction types maybeHeadItems =
+      let wildcards = map (\tp -> TPWildcard tp) types
+          expander = \(pat : rest) -> case pat of
+            TPWildcard _ ->
+              -- gets expanded into a bunch  of _'s
+              wildcards ++ rest
+            TPVariable _ _ ->
+              -- similar thing here
+              wildcards ++ rest
+            TPTuple _ pats ->
+              pats ++ rest
+            _ -> error "impossible"
+          expanded = map expander remainingPats
+          expandedTypes = types ++ tailTypes
+          headItems = case maybeHeadItems of
+            Just items -> items
+            Nothing -> wildcards
+       in case checkUsefulness expandedTypes expanded (headItems ++ tailExamined) of
+            Nothing -> Nothing
+            Just witnesses ->
+              let (tupleArgs, rest) = splitAt (length types) witnesses
+               in Just $ WTuple tupleArgs : rest
+
+    setupTConCall typeArgs desiredConstr@(ConstructorInfo _ _ _ params declaredArgs _) =
+      let -- the declared arg types mention the type's params (e.g. 'a),
+          -- so replace them with this match's actual type args
+          args = map (substParams (zip params typeArgs)) declaredArgs
+          desiredTp = case args of
+            [] -> []
+            item : [] -> [item]
+            lst -> [TTuple lst]
+          desiredWildcards = map TPWildcard desiredTp
+          expander = \(pat : rest) -> case pat of
+            TPWildcard _ -> [desiredWildcards ++ rest]
+            TPVariable _ _ -> [desiredWildcards ++ rest]
+            TPConstant _ (TConstVariant info) | info == desiredConstr -> [rest]
+            TPVariant _ info innerPat | info == desiredConstr -> [innerPat : rest]
+            _ -> []
+          expandedPats = concatMap expander remainingPats
+          expandedTypes = desiredTp ++ tailTypes
+          expandedExamined = desiredWildcards ++ tailExamined
+       in checkUsefulness expandedTypes expandedPats expandedExamined
+
+    extractConstr = \pat -> case pat of
+      TPConstant _ (TConstVariant constrRef) -> [constrRef]
+      TPVariant _ constrRef _ -> [constrRef]
+      _ -> []
+    headConstrs = concatMap extractConstr heads
 
 substParams :: [(TypeVar, Type)] -> Type -> Type
 substParams repl tp = case tp of

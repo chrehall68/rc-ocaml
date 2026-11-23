@@ -111,6 +111,101 @@ spec = do
       rejectedWith ["not matched: (true, false)"] $
         check "let g a b = match (a, b) with | (true, true) -> 1 | (false, false) -> 2"
 
+  describe "constructors" $ do
+    it "accepts every constructor of an option" $
+      accepted $
+        check "let x = Some 3;; match x with | Some _ -> () | None -> ()"
+    it "accepts a wildcard" $
+      accepted $
+        check "let x = Some 3;; match x with | _ -> ()"
+    it "accepts a variable catch-all after a constructor" $
+      accepted $
+        check "let x = Some 3;; match x with | None -> () | y -> ()"
+    it "reports a missing constant constructor" $
+      rejectedWith ["not matched: None"] $
+        check "let x = Some 3;; match x with | Some _ -> ()"
+    it "reports a missing constructor with an argument" $
+      rejectedWith ["not matched: Some _"] $
+        check "let x = Some 3;; match x with | None -> ()"
+    it "reports a missing value inside an argument" $
+      rejectedWith ["not matched: Some 1"] $
+        check "let x = Some 3;; match x with | Some 0 -> () | None -> ()"
+    it "accepts an argument covered by several clauses" $
+      accepted $
+        check "let x = Some true;; match x with | Some true -> () | Some false -> () | None -> ()"
+    it "reports a missing bool inside an argument" $
+      rejectedWith ["not matched: Some false"] $
+        check "let x = Some true;; match x with | Some true -> () | None -> ()"
+    it "instantiates the type parameter for the argument" $
+      rejectedWith ["not matched: Some (false, _)"] $
+        check "let x = Some (true, 1);; match x with | Some (true, _) -> () | None -> ()"
+    it "accepts lists" $
+      accepted $
+        check "let l = [1];; match l with | [] -> () | _ :: _ -> ()"
+    it "reports a missing empty list" $
+      rejectedWith ["not matched: []"] $
+        check "let l = [1];; match l with | _ :: _ -> ()"
+    it "reports a missing cons" $
+      rejectedWith ["not matched: _ :: _"] $
+        check "let l = [1];; match l with | [] -> ()"
+    it "checks user-defined variants" $
+      rejectedWith ["not matched: C"] $
+        check "type t = A | B of int | C;; let x = B 1;; match x with | A -> () | B _ -> ()"
+    it "accepts a user-defined variant that is fully covered" $
+      accepted $
+        check "type t = A | B of int | C;; let x = B 1;; match x with | A -> () | B _ -> () | C -> ()"
+    it "checks constructors next to other columns" $
+      rejectedWith ["not matched: (false, None)"] $
+        check "let t = (true, Some 1);; match t with | (true, _) -> () | (false, Some _) -> ()"
+    it "accepts a multi-argument constructor that is fully covered" $
+      accepted $
+        check "type t = P of int * bool | Q;; let x = Q;; match x with | P (_, true) -> () | P (_, false) -> () | Q -> ()"
+    it "reports a missing combination in a multi-argument constructor" $
+      rejectedWith ["not matched: P (0, false)"] $
+        check "type t = P of int * bool | Q;; let x = Q;; match x with | P (_, true) -> () | Q -> ()"
+    it "reports a missing int in a multi-argument constructor" $
+      rejectedWith ["not matched: P (1, true)"] $
+        check "type t = P of int * bool | Q;; let x = Q;; match x with | P (0, _) -> () | P (_, false) -> () | Q -> ()"
+    it "accepts nested constructors that are fully covered" $
+      accepted $
+        check "let x = Some (Some 1);; match x with | Some (Some _) -> () | Some None -> () | None -> ()"
+    it "reports a missing nested constructor" $
+      rejectedWith ["not matched: Some None"] $
+        check "let x = Some (Some 1);; match x with | Some (Some _) -> () | None -> ()"
+    it "reports a missing value two constructors deep" $
+      rejectedWith ["not matched: Some (Some 1)"] $
+        check "let x = Some (Some 1);; match x with | Some (Some 0) -> () | Some None -> () | None -> ()"
+    it "accepts overlapping constructor rows that together cover everything" $
+      accepted $
+        check "let x = Some 1;; match x with | Some 0 -> () | Some _ -> () | None -> ()"
+    it "accepts a list matched by length" $
+      accepted $
+        check "let l = [1];; match l with | [] -> () | [_] -> () | _ :: _ :: _ -> ()"
+    it "reports a missing list length" $
+      rejectedWith ["not matched: 0 :: (_ :: _)"] $
+        check "let l = [1];; match l with | [] -> () | [_] -> ()"
+    it "reports a missing element value in a singleton list" $
+      rejectedWith ["not matched: 1 :: []"] $
+        check "let l = [1];; match l with | [] -> () | [0] -> () | _ :: _ :: _ -> ()"
+    it "accepts a head-and-tail pattern with a catch-all tail" $
+      accepted $
+        check "let l = [true];; match l with | [] -> () | true :: _ -> () | false :: _ -> ()"
+    it "reports a missing bool head with a recursive tail" $
+      rejectedWith ["not matched: false :: _"] $
+        check "let l = [true];; match l with | [] -> () | true :: _ -> ()"
+    it "checks a list of options" $
+      rejectedWith ["not matched: None :: _"] $
+        check "let l = [Some 1];; match l with | [] -> () | Some _ :: _ -> ()"
+    it "checks an option holding a list" $
+      rejectedWith ["not matched: Some []"] $
+        check "let x = Some [1];; match x with | None -> () | Some (_ :: _) -> ()"
+    it "checks a user-defined recursive variant" $
+      rejectedWith ["not matched: Node (Leaf, _)"] $
+        check "type tree = Leaf | Node of tree * tree;; let t = Leaf;; match t with | Leaf -> () | Node (Node _, _) -> () | Node (_, _) when true -> ()"
+    it "does not let a guarded constructor clause make a match exhaustive" $
+      rejectedWith [guardNote] $
+        check "let x = Some 3;; match x with | Some _ when true -> () | None -> ()"
+
   describe "guards" $ do
     it "does not let a guarded clause make a match exhaustive" $
       rejectedWith [] $
