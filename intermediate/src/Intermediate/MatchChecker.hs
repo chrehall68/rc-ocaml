@@ -105,8 +105,12 @@ checkExhaustiveness prog@(TProgram definitions) =
 checkDefinition :: TDefinition Type -> Check
 checkDefinition (TDefinitionType _) = return ()
 checkDefinition (TDefinitionExpr expr) = checkExpr expr
-checkDefinition (TDefinitionLet _ bindings) =
-  collectErrors $ map (\(TLetBinding _ expr) -> checkExpr expr) bindings
+checkDefinition (TDefinitionLet _ bindings) = collectErrors $ map checkBinding bindings
+
+-- the pattern of a let binding must match every value, like a single-case match
+checkBinding :: TLetBinding Type -> Check
+checkBinding (TLetBinding pat expr) =
+  collectErrors [checkCases (patternAnnotation pat) [TCase pat Nothing expr], checkExpr expr]
 
 checkExpr :: TExpr Type -> Check
 checkExpr expr = case expr of
@@ -124,11 +128,13 @@ checkExpr expr = case expr of
   TEWhile _ cond body -> collectErrors $ map checkExpr [cond, body]
   TEFor _ _ start end _ body -> collectErrors $ map checkExpr [start, end, body]
   TESequence _ left right -> collectErrors $ map checkExpr [left, right]
-  -- TODO: patterns might be in the lhs of a let
-  TELet _ _ bindings body -> collectErrors $ map checkExpr $ body : (map (\(TLetBinding _ expr) -> expr) bindings)
+  TELet _ _ bindings body -> collectErrors $ checkExpr body : map checkBinding bindings
   -- deliberately applying match and function last
-  TEFunction tp _ defaultExpr cases_ ->
-    collectErrors $ checkCases tp cases_ : map checkExpr (maybe id (:) defaultExpr (caseExprs cases_))
+  TEFunction _ _ defaultExpr cases_ ->
+    -- the matched type is the parameter's, not the whole arrow type
+    -- (every case's pattern has it, but a function always has at least one case)
+    let paramTp = patternAnnotation (head [pat | TCase pat _ _ <- cases_])
+     in collectErrors $ checkCases paramTp cases_ : map checkExpr (maybe id (:) defaultExpr (caseExprs cases_))
   TEMatch _ matchedExpr cases_ ->
     collectErrors $ checkCases (exprAnnotation matchedExpr) cases_ : map checkExpr (matchedExpr : caseExprs cases_)
   TETry _ _ _ -> return () -- TODO

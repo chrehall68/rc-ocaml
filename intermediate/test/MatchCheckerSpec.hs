@@ -206,6 +206,38 @@ spec = do
       rejectedWith [guardNote] $
         check "let x = Some 3;; match x with | Some _ when true -> () | None -> ()"
 
+  describe "let bindings and parameters" $ do
+    it "accepts a variable binding" $
+      accepted $
+        check "let x = Some 1"
+    it "accepts an irrefutable tuple binding" $
+      accepted $
+        check "let (a, b) = (1, true)"
+    it "reports a refutable top-level binding" $
+      rejectedWith ["not matched: None"] $
+        check "let (Some y) = Some 1"
+    it "reports a refutable let ... in binding" $
+      rejectedWith ["not matched: None"] $
+        check "let f z = let (Some y) = z in y"
+    it "reports a refutable binding nested in a tuple" $
+      rejectedWith ["not matched: (false, _)"] $
+        check "let (true, a) = (true, 1)"
+    it "reports a refutable function parameter" $
+      rejectedWith ["not matched: None"] $
+        check "let f (Some y) = y"
+    it "reports a refutable parameter after an ordinary one" $
+      rejectedWith ["not matched: false"] $
+        check "let f a true = a"
+    it "accepts an irrefutable constructor parameter" $
+      accepted $
+        check "type w = W of int;; let f (W n) = n"
+    it "accepts a tuple parameter" $
+      accepted $
+        check "let f (a, b) = a + b"
+    it "reports a refutable optional parameter with a default" $
+      rejectedWith ["not matched: None"] $
+        check "let f ?(x = Some 1) () = x;; let g ?x:(Some y = Some 1) () = y"
+
   describe "guards" $ do
     it "does not let a guarded clause make a match exhaustive" $
       rejectedWith [] $
