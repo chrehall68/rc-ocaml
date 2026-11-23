@@ -22,6 +22,7 @@ module Intermediate.TypedAst where
 import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Path, TypeDefinition)
 import Frontend.Tokens (IntLiteral)
+import Intermediate.SymbolTable (ConstructorRef)
 import Intermediate.Type (ArgLabel)
 
 -- the constants that can remain after lowering
@@ -36,7 +37,7 @@ data TConstant
   | -- the empty array [||]
     TConstEmptyArray
   | -- a constructor without arguments, including [] and None
-    TConstVariant Path
+    TConstVariant ConstructorRef
   | -- `Tagname
     TConstPolymorphicVariant String
   deriving (Show, Eq)
@@ -50,7 +51,7 @@ data TExpr t
     TEVar t Path
   | -- constructor applied to its argument; constant constructors stay in TEConstant
     -- a constructor with several arguments takes them as one tuple
-    TEVariant t Path (TExpr t)
+    TEVariant t ConstructorRef (TExpr t)
   | -- TODO: needs row types before it can be typed
 
     -- | TEPolymorphicVariant t String (TExpr t)
@@ -96,7 +97,7 @@ data TPattern t
   | TPAlias t (TPattern t) String
   | -- TODO: needs lowering (and rules on names in different branches) before it can be typed
     -- TPOr t (TPattern t) (TPattern t)
-    TPVariant t Path (TPattern t)
+    TPVariant t ConstructorRef (TPattern t)
   | -- TODO: needs row types before it can be typed
     TPPolymorphicVariant t String (TPattern t)
   | -- #typ, matches any polymorphic variant tag in typ

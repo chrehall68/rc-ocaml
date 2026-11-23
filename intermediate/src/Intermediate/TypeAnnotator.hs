@@ -55,19 +55,36 @@ lowerDefinitionOrExpr defOrExpr = do
     Ast.Expr e -> TDefinitionExpr <$> lowerExpr e
 
 -- [] is just the constant constructor of the list type
-lowerConstant :: Ast.Constant -> TConstant
+-- returns the constant along with its type
+lowerConstant :: Ast.Constant -> LowerAndInferM (TConstant, Type)
 lowerConstant constant =
   case constant of
-    Ast.ConstantInt i -> TConstInt i
-    Ast.ConstantDouble d -> TConstDouble d
-    Ast.ConstantChar c -> TConstChar c
-    Ast.ConstantString str -> TConstString str
-    Ast.ConstantBool b -> TConstBool b
-    Ast.ConstantUnit -> TConstUnit
-    Ast.ConstantList -> TConstVariant (Ast.Path Nothing "[]")
-    Ast.ConstantArray -> TConstEmptyArray
-    Ast.ConstantPolymorphicVariant tag -> TConstPolymorphicVariant tag
-    Ast.ConstantVariant path -> TConstVariant path
+    Ast.ConstantInt i -> plain (TConstInt i)
+    Ast.ConstantDouble d -> plain (TConstDouble d)
+    Ast.ConstantChar c -> plain (TConstChar c)
+    Ast.ConstantString str -> plain (TConstString str)
+    Ast.ConstantBool b -> plain (TConstBool b)
+    Ast.ConstantUnit -> plain TConstUnit
+    Ast.ConstantList -> constantConstructor (Ast.Path Nothing "[]")
+    Ast.ConstantArray -> plain TConstEmptyArray
+    Ast.ConstantPolymorphicVariant tag -> plain (TConstPolymorphicVariant tag)
+    Ast.ConstantVariant path -> constantConstructor path
+  where
+    plain c = do
+      t <- typeConstant c
+      return (c, t)
+
+-- a constructor used without arguments
+constantConstructor :: Ast.Path -> LowerAndInferM (TConstant, Type)
+constantConstructor path = do
+  -- need to know where this variant name comes from
+  symtab <- gets symbolTable
+  info <- liftEither $ SymTab.resolveConstructor symtab path
+  (args, result) <- instantiateConstructor info
+  -- double check that it is a 0-arg constructor
+  case args of
+    [] -> return (TConstVariant (SymTab.constructorRef info), result)
+    expected -> throwError $ "constructor " ++ show path ++ " expects " ++ show expected ++ " as an argument, but was called without any arguments"
 
 typeConstant :: TConstant -> LowerAndInferM Type
 typeConstant constant =
@@ -81,18 +98,11 @@ typeConstant constant =
     -- don't know what will be inside, so we store it as an 'a list / 'a array
     TConstEmptyArray -> do
       tvar <- liftTypes newTypeVar
-      return $ TCon "array" [TVar tvar]
+      return $ TCon (builtinTypeName "array") [TVar tvar]
     -- TODO: implement these
     TConstPolymorphicVariant _ -> throwError "polymorphic variants not implemented yet"
-    TConstVariant path -> do
-      -- need to know where this variant name comes from
-      symtab <- gets symbolTable
-      info <- liftEither $ SymTab.resolveConstructor symtab path
-      (args, result) <- instantiateConstructor info
-      -- double check that it is a 0-arg constructor
-      case args of
-        [] -> return result
-        expected -> throwError $ "constructor " ++ show path ++ " expects " ++ show expected ++ " as an argument, but was called without any arguments"
+    -- resolved by constantConstructor, which also knows the type
+    TConstVariant _ -> error "impossible"
 
 -- constructors of polymorphic types get fresh type variables at each use,
 -- returns the argument types and the result type
@@ -183,13 +193,13 @@ applyCurriedFunction curriedFunc args@(unlabeled, labeled, optional) = do
               -- ~name:e wraps the value in Some
               (Nothing, Just expr) -> do
                 typedExpr <- lowerExpr expr
-                unifyOrRollback lhs (TCon "option" [exprAnnotation typedExpr])
-                let wrapped = TEVariant lhs (Ast.Path Nothing "Some") typedExpr
+                unifyOrRollback lhs (TCon (builtinTypeName "option") [exprAnnotation typedExpr])
+                let wrapped = TEVariant lhs (SymTab.constructorRef (SymTab.builtinConstructor "Some")) typedExpr
                 applyTyped rhs wrapped (unlabeled, Data.Map.delete name labeled, optional)
               (Nothing, Nothing)
                 | not (null unlabeled) -> do
                     -- a positional argument follows, so the optional is defaulted
-                    let none = TEConstant lhs (TConstVariant (Ast.Path Nothing "None"))
+                    let none = TEConstant lhs (TConstVariant (SymTab.constructorRef (SymTab.builtinConstructor "None")))
                     applyTyped rhs none args
                 | otherwise -> etaExpand label lhs rhs
     -- we don't know anything about the function (e.g. a lambda parameter),
@@ -220,7 +230,7 @@ applyConstructor constr typedArg = do
     [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
     arg : [] -> unifyOrRollback arg (exprAnnotation typedArg)
     args -> unifyOrRollback (TTuple args) (exprAnnotation typedArg)
-  return $ TEVariant constrResult constr typedArg
+  return $ TEVariant constrResult (SymTab.constructorRef constrInfo) typedArg
 
 -- same, but for a constructor in a pattern
 applyConstructorPattern :: Ast.Path -> TPattern Type -> LowerAndInferM (TPattern Type)
@@ -232,7 +242,7 @@ applyConstructorPattern constr typedInner = do
     [] -> throwError $ "constructor " ++ show constr ++ " expects no arguments, but was invoked on arguments"
     arg : [] -> unifyOrRollback arg (patternAnnotation typedInner)
     args -> unifyOrRollback (TTuple args) (patternAnnotation typedInner)
-  return $ TPVariant constrResult constr typedInner
+  return $ TPVariant constrResult (SymTab.constructorRef constrInfo) typedInner
 
 -- similar to constructors, but for polymorphic records
 -- returns what we know about the field, the record's type, and the field's type
@@ -272,8 +282,7 @@ lowerExpr :: Ast.Expr -> LowerAndInferM (TExpr Type)
 lowerExpr expr =
   case expr of
     Ast.ExprConstant rawConstant -> do
-      let constant = lowerConstant rawConstant
-      t <- typeConstant constant
+      (constant, t) <- lowerConstant rawConstant
       return $ TEConstant t constant
     Ast.ExprPath p -> do
       -- look up where this value comes from
@@ -308,7 +317,7 @@ lowerExpr expr =
       innerVar <- liftTypes newTypeVar
       mapM_ (unifyOrRollback (TVar innerVar) . exprAnnotation) typedElements
       -- everything worked
-      return $ TEArray (TCon "array" [TVar innerVar]) typedElements
+      return $ TEArray (TCon (builtinTypeName "array") [TVar innerVar]) typedElements
     Ast.ExprRecord source fields -> do
       let paths = [path | Ast.RecordField path _ _ <- fields]
       (recordType, allFields, fieldTypes) <- instantiateFields paths
@@ -544,11 +553,11 @@ lowerOptionalParameter name pat constraint dflt = do
     Just d -> do
       -- body sees a t, caller passes a t option
       unifyOrRollback patType (exprAnnotation d)
-      return $ TCon "option" [patType]
+      return $ TCon (builtinTypeName "option") [patType]
     Nothing -> do
       -- without a default, the body sees the option itself
       inner <- liftTypes newTypeVar
-      unifyOrRollback patType (TCon "option" [TVar inner])
+      unifyOrRollback patType (TCon (builtinTypeName "option") [TVar inner])
       return patType
   return (Optional name, typedDefault, typedPat, argType)
 
@@ -576,8 +585,7 @@ lowerAndInsertPattern pat =
       let tp = TVar tVar
       return $ TPWildcard tp
     Ast.PatternConstant rawConstant -> do
-      let constant = lowerConstant rawConstant
-      tp <- typeConstant constant
+      (constant, tp) <- lowerConstant rawConstant
       return $ TPConstant tp constant
     Ast.PatternAlias innerPat name -> do
       typedInner <- lowerAndInsertPattern innerPat
@@ -660,7 +668,7 @@ lowerTypeApplication :: [Ast.TypeExpr] -> Ast.ExtendedPath -> LowerAndInferM Typ
 lowerTypeApplication argExprs extendedPath = do
   normalizedPath <- extendedPathToPath extendedPath
   symtab <- gets symbolTable
-  SymTab.TypeInfo params body <- liftEither $ SymTab.resolveType symtab normalizedPath
+  SymTab.TypeInfo params body _ <- liftEither $ SymTab.resolveType symtab normalizedPath
   when (length params /= length argExprs) $
     throwError $
       "type " ++ show normalizedPath ++ " expects " ++ show (length params) ++ " argument(s), but was given " ++ show (length argExprs)
@@ -695,28 +703,38 @@ lowerTypeDefinitions isNonrec typedefs = do
   let isAlias (td, _) = case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
         (Just _, Nothing) -> True
         _ -> False
-      (aliases, nominals) = partition isAlias prepared
-  -- every type that isn't an alias is its own distinct type,
-  -- so in a recursive group it can be referred to before its body is lowered
+      (aliases, nominalDefs) = partition isAlias prepared
+  -- every type that isn't an alias is its own distinct type, with a name
+  -- no other type (even one with the same written name) shares
+  nominals <- forM nominalDefs $ \(td, vars) -> do
+    name <- liftTypes $ newTypeName (Ast.typedefName td)
+    return (td, vars, name)
+  -- in a recursive group it can be referred to before its body is lowered
   when (not isNonrec) $
     forM_ nominals $
-      \(td, vars) -> registerType (Ast.typedefName td) (nominalInfo td vars)
+      \(td, vars, name) -> registerType (Ast.typedefName td) (nominalInfo name vars [])
   -- aliases first, so the variants can use them
   aliasInfos <- forM aliases $ \(td, vars) -> do
     body <- withTypeParams td vars $ case Ast.typedefEquation td of
       Just eq -> lowerTypeExpr eq
       Nothing -> error "impossible"
-    let info = SymTab.TypeInfo vars body
+    let info = SymTab.TypeInfo vars body []
     when (not isNonrec) $ registerType (Ast.typedefName td) info
     return (Ast.typedefName td, info)
-  nominalInfos <- forM nominals $ \(td, vars) -> do
-    withTypeParams td vars $ case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
-      (Nothing, Nothing) -> return ()
-      (Nothing, Just (Ast.TypeVariant constructors)) ->
-        forM_ constructors $ \(Ast.ConstrDecl constrName typeExprs) -> do
+  nominalInfos <- forM nominals $ \(td, vars, name) -> do
+    constructorInfos <- withTypeParams td vars $ case (Ast.typedefEquation td, Ast.typedefRepresentation td) of
+      (Nothing, Nothing) -> return []
+      (Nothing, Just (Ast.TypeVariant constructors)) -> do
+        when (hasDuplicates [constrName | Ast.ConstrDecl constrName _ <- constructors]) $
+          throwError $
+            "type " ++ Ast.typedefName td ++ " has a constructor defined more than once"
+        decls <- forM constructors $ \(Ast.ConstrDecl constrName typeExprs) -> do
           desiredTypes <- mapM lowerTypeExpr typeExprs
-          let info = SymTab.ConstructorInfo {SymTab.constructorParams = vars, SymTab.constructorArgs = desiredTypes, SymTab.constructorResult = nominalType td vars}
-          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing constrName) info})
+          return (constrName, desiredTypes)
+        let infos = SymTab.variantConstructors vars (nominalType name vars) decls
+        forM_ infos $ \info ->
+          modify (\s -> s {symbolTable = SymTab.insertConstructor (symbolTable s) (Ast.Path Nothing (SymTab.constructorName info)) info})
+        return infos
       (Nothing, Just (Ast.TypeRecord fieldDecls)) -> do
         let names = map Ast.fieldDeclName fieldDecls
         when (hasDuplicates names) $
@@ -728,18 +746,19 @@ lowerTypeDefinitions isNonrec typedefs = do
                 SymTab.FieldInfo
                   { SymTab.fieldParams = vars,
                     SymTab.fieldType = desiredType,
-                    SymTab.fieldRecord = nominalType td vars,
+                    SymTab.fieldRecord = nominalType name vars,
                     SymTab.fieldIsMutable = mutable,
                     SymTab.recordFields = names
                   }
           modify (\s -> s {symbolTable = SymTab.insertField (symbolTable s) (Ast.Path Nothing fieldName) info})
+        return []
       _ -> throwError "re-exporting types not supported yet"
-    return (Ast.typedefName td, nominalInfo td vars)
+    return (Ast.typedefName td, nominalInfo name vars constructorInfos)
   -- for nonrec, the new names only become visible now
   forM_ (aliasInfos ++ nominalInfos) $ \(name, info) -> registerType name info
   where
-    nominalType td vars = TCon (Ast.typedefName td) (map TVar vars)
-    nominalInfo td vars = SymTab.TypeInfo vars (nominalType td vars)
+    nominalType name vars = TCon name (map TVar vars)
+    nominalInfo name vars = SymTab.TypeInfo vars (nominalType name vars)
 
 hasDuplicates :: (Eq a) => [a] -> Bool
 hasDuplicates xs = length (nub xs) /= length xs

@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
 import Intermediate.MatchChecker (ExhaustiveTProgram (..))
-import Intermediate.Type (Type (..))
+import Intermediate.Type (Type (..), builtinTypeName)
 import Intermediate.TypedAst
 import Numeric (showHex)
 import Text.Read (readMaybe)
@@ -153,8 +153,7 @@ kind ty = case ty of
   TChar -> pure IntValue
   TFloat -> pure DoubleValue
   TString -> pure RefValue
-  TCon "array" [_] -> pure RefValue
-  TCon "list" [_] -> pure RefValue
+  TCon name [_] | name == builtinTypeName "array" || name == builtinTypeName "list" -> pure RefValue
   _ -> reject ("JVM representation for " ++ show ty)
 
 width :: ValueKind -> Int
@@ -184,8 +183,8 @@ requireType expected actual =
 -- Polymorphic list/array bindings can be instantiated at different element
 -- types. Their element type is erased by the current JVM representation.
 requireLocalType :: Type -> Type -> Emit ()
-requireLocalType (TCon "list" [_]) (TCon "list" [_]) = pure ()
-requireLocalType (TCon "array" [_]) (TCon "array" [_]) = pure ()
+requireLocalType (TCon name1 [_]) (TCon name2 [_])
+  | name1 == name2 && name1 `elem` [builtinTypeName "list", builtinTypeName "array"] = pure ()
 requireLocalType expected actual = requireType expected actual
 
 freshLocal :: Type -> Emit Local
@@ -414,7 +413,7 @@ emitConstant ty constant = case constant of
   --   TCon "list" [_] -> pure (instruction 1 "aconst_null")
   --   _ -> reject ("empty list with type " ++ show ty)
   TConstEmptyArray -> case ty of
-    TCon "array" [_] -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
+    TCon name [_] | name == builtinTypeName "array" -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
     _ -> reject ("empty array with type " ++ show ty)
   TConstVariant _ -> reject "variant constants"
   TConstPolymorphicVariant _ -> reject "polymorphic variant constants"

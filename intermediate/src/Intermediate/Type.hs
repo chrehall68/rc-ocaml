@@ -1,4 +1,4 @@
-module Intermediate.Type (TypeVar (..), ArgLabel (..), Type (..), TypeVarState (..), TypeVarM, TypeScheme (..), initialTypeVarState, newTypeVar, bindTypeVar, prune, unify, resolveType, freeTypeVars, generalize, instantiate, substituteTypes) where
+module Intermediate.Type (TypeVar (..), TypeName (..), builtinTypeName, newTypeName, ArgLabel (..), Type (..), TypeVarState (..), TypeVarM, TypeScheme (..), initialTypeVarState, newTypeVar, bindTypeVar, prune, unify, resolveType, freeTypeVars, generalize, instantiate, substituteTypes) where
 
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT, throwError)
@@ -7,6 +7,7 @@ import Control.Monad.Trans
 import qualified Data.Map
 import Data.Maybe (isNothing)
 import qualified Data.Set
+import Data.String (IsString (..))
 
 -- id is a unique identifier for a typevar
 -- thus same id -> same type variable
@@ -14,6 +15,24 @@ import qualified Data.Set
 -- in the substitution map in TypeVarState
 newtype TypeVar = TypeVar {typeVarId :: Int}
   deriving (Show, Eq, Ord)
+
+-- the identity of a named type constructor
+-- base = what was written in the program, stamp = a (normally) unique autoincrementing integer
+-- specifically, stamp will be unique for everything except builtin types
+-- which is why it's important that TypeName derives eq (comparing both fields)
+data TypeName = TypeName {typeNameBase :: String, typeNameStamp :: Int}
+  deriving (Eq, Ord)
+
+instance Show TypeName where
+  show (TypeName base 0) = base
+  show (TypeName base stamp) = base ++ "/" ++ show stamp
+
+-- so that builtins can be written as plain string literals with OverloadedStrings
+instance IsString TypeName where
+  fromString = builtinTypeName
+
+builtinTypeName :: String -> TypeName
+builtinTypeName base = TypeName base 0
 
 -- how an argument is passed to a function
 data ArgLabel
@@ -23,8 +42,6 @@ data ArgLabel
   deriving (Show, Eq)
 
 -- TODO: polymorphic variants need row types
--- TODO: let-polymorphism; generalize let-bound types into type schemes
--- (forall a. a -> a) and instantiate them with fresh type vars at each use
 data Type
   = -- basic units
     TUnit
@@ -38,13 +55,15 @@ data Type
   | TTuple [Type]
   | -- a named type constructor applied to its arguments,
     -- e.g. TCon "list" [TInt], TCon "option" [a], or a user-defined type
-    TCon String [Type]
+    TCon TypeName [Type]
   | TVar TypeVar
   deriving (Show, Eq)
 
 -- state needed while generating and binding type variables
 data TypeVarState = TypeVarState
   { lastUsedTypeId :: Int,
+    -- same idea, for the stamps of user-defined type names
+    lastUsedTypeNameStamp :: Int,
     -- type var id: type it is bound to
     substitutions :: Data.Map.Map Int Type
   }
@@ -56,7 +75,7 @@ type TypeVarM = State TypeVarState
 data TypeScheme = Forall (Data.Set.Set TypeVar) Type
 
 initialTypeVarState :: TypeVarState
-initialTypeVarState = TypeVarState {lastUsedTypeId = 0, substitutions = Data.Map.empty}
+initialTypeVarState = TypeVarState {lastUsedTypeId = 0, lastUsedTypeNameStamp = 0, substitutions = Data.Map.empty}
 
 -- creates a fresh, unbound type variable with a unique id
 newTypeVar :: TypeVarM TypeVar
@@ -64,6 +83,12 @@ newTypeVar = do
   modify (\s -> s {lastUsedTypeId = lastUsedTypeId s + 1})
   newId <- gets lastUsedTypeId
   return $ TypeVar {typeVarId = newId}
+
+-- creates a fresh name for a newly defined type
+newTypeName :: String -> TypeVarM TypeName
+newTypeName base = do
+  modify (\s -> s {lastUsedTypeNameStamp = lastUsedTypeNameStamp s + 1})
+  TypeName base <$> gets lastUsedTypeNameStamp
 
 -- binds a type var to a type
 -- assumes the type var is not already bound
@@ -117,8 +142,8 @@ unify originalT1 originalT2 = do
         return ()
       (TCon tName1 types1, TCon tName2 types2) -> do
         -- must have same name and zip together be unifiable
-        when (tName1 /= tName2) $ throwError $ "Cannot unify type constructors " ++ tName1 ++ " and " ++ tName2
-        when (length types1 /= length types2) $ throwError $ "Cannot unify type constructors " ++ tName1 ++ " and " ++ tName2 ++ " because have different lengths of parameters"
+        when (tName1 /= tName2) $ throwError $ "Cannot unify type constructors " ++ show tName1 ++ " and " ++ show tName2
+        when (length types1 /= length types2) $ throwError $ "Cannot unify type constructors " ++ show tName1 ++ " and " ++ show tName2 ++ " because have different lengths of parameters"
         mapM_ (\(a, b) -> unify a b) (zip types1 types2)
         return ()
       (TTuple types1, TTuple types2) -> do
