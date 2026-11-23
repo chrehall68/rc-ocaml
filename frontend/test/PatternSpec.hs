@@ -3,8 +3,8 @@ module PatternSpec (spec) where
 import Frontend.Ast hiding (pat)
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parsePattern)
-import Test.Hspec
 import Frontend.Tokens
+import Test.Hspec
 
 pat :: String -> Either String Pattern
 pat source = alexScanTokens source >>= parsePattern
@@ -12,7 +12,7 @@ pat source = alexScanTokens source >>= parsePattern
 name :: String -> Pattern
 name = PatternVariable
 
-int :: Int -> Pattern
+int :: Integer -> Pattern
 int n = PatternConstant (ConstantInt (IntLiteral n Unspecified))
 
 variant :: String -> Pattern
@@ -47,8 +47,12 @@ spec = do
           (PatternType (ExtendedPath (Just (ExtendedModulePath [ExtendedModuleName "A" [], ExtendedModuleName "B" []])) "t"))
       pat "#F(M).t"
         `shouldBe` Right
-          (PatternType (ExtendedPath
-            (Just (ExtendedModulePath [ExtendedModuleName "F" [ExtendedModulePath [ExtendedModuleName "M" []]]])) "t"))
+          ( PatternType
+              ( ExtendedPath
+                  (Just (ExtendedModulePath [ExtendedModuleName "F" [ExtendedModulePath [ExtendedModuleName "M" []]]]))
+                  "t"
+              )
+          )
     it "parses an operator binder" $
       pat "(+)" `shouldBe` Right (name "+")
     it "parses character ranges" $
@@ -64,8 +68,10 @@ spec = do
     it "parses nested constructor and tag applications without parentheses" $ do
       pat "Some Some x"
         `shouldBe` Right
-          (PatternVariant (Path Nothing "Some")
-            (PatternVariant (Path Nothing "Some") (name "x")))
+          ( PatternVariant
+              (Path Nothing "Some")
+              (PatternVariant (Path Nothing "Some") (name "x"))
+          )
       pat "`Outer `Inner x"
         `shouldBe` Right
           (PatternPolymorphicVariant "Outer" (PatternPolymorphicVariant "Inner" (name "x")))
@@ -121,11 +127,15 @@ spec = do
     it "parses shorthand and explicitly bound fields" $
       pat "{ x; M.y = Some z }"
         `shouldBe` Right
-          (PatternRecord
-            [ PatternField (Path Nothing "x") Nothing (name "x"),
-              PatternField (Path (Just (ModulePath ["M"])) "y") Nothing
-                (PatternVariant (Path Nothing "Some") (name "z"))
-            ] False)
+          ( PatternRecord
+              [ PatternField (Path Nothing "x") Nothing (name "x"),
+                PatternField
+                  (Path (Just (ModulePath ["M"])) "y")
+                  Nothing
+                  (PatternVariant (Path Nothing "Some") (name "z"))
+              ]
+              False
+          )
     it "supports open records and a final semicolon" $ do
       pat "{x; _}" `shouldBe` Right (PatternRecord [PatternField (Path Nothing "x") Nothing (name "x")] True)
       pat "{x; _;}" `shouldBe` pat "{x; _}"
@@ -133,19 +143,32 @@ spec = do
     it "supports field and pattern type constraints" $ do
       pat "(x : int)" `shouldBe` Right (PatternAnnotated (name "x") (typeName "int"))
       pat "(x : ('a, 'b) result)"
-        `shouldBe` Right (PatternAnnotated (name "x")
-          (TypeApplication [TypeVariable "a", TypeVariable "b"] (ExtendedPath Nothing "result")))
+        `shouldBe` Right
+          ( PatternAnnotated
+              (name "x")
+              (TypeApplication [TypeVariable "a", TypeVariable "b"] (ExtendedPath Nothing "result"))
+          )
       pat "(x : int * bool -> float -> string)"
-        `shouldBe` Right (PatternAnnotated (name "x")
-          (TypeArrow
-            (TypeTuple [typeName "int", typeName "bool"])
-            (TypeArrow (typeName "float") (typeName "string"))))
+        `shouldBe` Right
+          ( PatternAnnotated
+              (name "x")
+              ( TypeArrow
+                  (TypeTuple [typeName "int", typeName "bool"])
+                  (TypeArrow (typeName "float") (typeName "string"))
+              )
+          )
       pat "{ x : int = value; _ }"
-        `shouldBe` Right (PatternRecord
-          [PatternField (Path Nothing "x") (Just (typeName "int")) (name "value")] True)
+        `shouldBe` Right
+          ( PatternRecord
+              [PatternField (Path Nothing "x") (Just (typeName "int")) (name "value")]
+              True
+          )
       pat "{M.x : int}"
-        `shouldBe` Right (PatternRecord
-          [PatternField (Path (Just (ModulePath ["M"])) "x") (Just (typeName "int")) (name "x")] False)
+        `shouldBe` Right
+          ( PatternRecord
+              [PatternField (Path (Just (ModulePath ["M"])) "x") (Just (typeName "int")) (name "x")]
+              False
+          )
     it "parses local module opens with each container" $ do
       pat "M.()"
         `shouldBe` Right
@@ -157,8 +180,14 @@ spec = do
       pat "M.[|x|]"
         `shouldBe` Right (PatternLocalOpen (ModulePath ["M"]) (PatternArray [name "x"]))
       pat "M.{x}"
-        `shouldBe` Right (PatternLocalOpen (ModulePath ["M"]) (PatternRecord
-          [PatternField (Path Nothing "x") Nothing (name "x")] False))
+        `shouldBe` Right
+          ( PatternLocalOpen
+              (ModulePath ["M"])
+              ( PatternRecord
+                  [PatternField (Path Nothing "x") Nothing (name "x")]
+                  False
+              )
+          )
 
   describe "invalid patterns" $ do
     it "rejects missing constructor arguments and separators" $ do

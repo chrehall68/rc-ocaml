@@ -2,6 +2,9 @@ module Intermediate.SymbolTable
   ( SymbolTable,
     ConstructorInfo (..),
     TypeInfo (..),
+    Sibling (..),
+    builtinConstructor,
+    variantConstructors,
     FieldInfo (..),
     empty,
     resolveValue,
@@ -26,20 +29,60 @@ import Control.Monad (foldM)
 import qualified Data.Map
 import qualified Data.Set
 import Frontend.Ast (Path (..))
-import Intermediate.Type (ArgLabel (..), Type (..), TypeScheme (..), TypeVar (..), TypeVarM, freeTypeVars, generalize)
+import Intermediate.Type (ArgLabel (..), Type (..), TypeScheme (..), TypeVar (..), TypeVarM, builtinTypeName, freeTypeVars, generalize)
 
 -- what we know about a variant constructor, e.g. for
 -- type 'a option = None | Some of 'a
 -- Some has params ['a], args ['a], and result 'a option
 -- params need to be replaced with fresh type vars at each use,
 -- otherwise Some 1 and Some true would have to share a type
+-- constructorTag is its position in the declaration (None = 0, Some = 1),
+-- so two values of the same variant type are built by the same constructor
+-- exactly when their tags match
+-- constructorSiblings lists every constructor of the type (including this one)
+-- in declaration order, which lets us notice when a match forgets one
 data ConstructorInfo = ConstructorInfo
-  { constructorParams :: [TypeVar],
+  { constructorName :: String,
+    constructorTag :: Int,
+    constructorSiblings :: [Sibling],
+    constructorParams :: [TypeVar],
     -- empty for constant constructors
     constructorArgs :: [Type],
     constructorResult :: Type
   }
   deriving (Show, Eq)
+
+-- just enough about a constructor to know its shape
+data Sibling = Sibling
+  { siblingName :: String,
+    siblingHasArgument :: Bool
+  }
+  deriving (Show, Eq)
+
+-- one of the predefined constructors (None, Some, [], ::), for code the compiler
+-- generates itself. these are looked up in the initial scope, so a user redefining
+-- the name can't change what they mean
+builtinConstructor :: String -> ConstructorInfo
+builtinConstructor name = case Data.Map.lookup name (constructors initialScope) of
+  Just info -> info
+  Nothing -> error $ "not a builtin constructor: " ++ name
+
+-- builds the constructors of a variant type from their names and argument types
+-- the result is in declaration order, so the tags are the positions
+variantConstructors :: [TypeVar] -> Type -> [(String, [Type])] -> [ConstructorInfo]
+variantConstructors params result decls =
+  [ ConstructorInfo
+      { constructorName = name,
+        constructorTag = tag,
+        constructorSiblings = siblings,
+        constructorParams = params,
+        constructorArgs = args,
+        constructorResult = result
+      }
+  | (tag, (name, args)) <- zip [0 ..] decls
+  ]
+  where
+    siblings = [Sibling name (not (null args)) | (name, args) <- decls]
 
 -- what we know about a record field, e.g. for
 -- type 'a box = {mutable contents : 'a}
@@ -52,7 +95,9 @@ data FieldInfo = FieldInfo
     fieldType :: Type,
     fieldRecord :: Type,
     fieldIsMutable :: Bool,
-    recordFields :: [String]
+    recordFields :: [String],
+    -- the type of each of recordFields, in the same order (in terms of fieldParams)
+    recordFieldTypes :: [Type]
   }
   deriving (Show, Eq)
 
@@ -60,9 +105,12 @@ data FieldInfo = FieldInfo
 -- the params are ['a] and the body is 'a option; writing `int option`
 -- substitutes the arguments for the params in the body
 -- (a plain type like int has no params)
+-- typeConstructors is every constructor in declaration order,
+-- empty unless this is a variant type
 data TypeInfo = TypeInfo
   { typeParams :: [TypeVar],
-    typeBody :: Type
+    typeBody :: Type,
+    typeConstructors :: [ConstructorInfo]
   }
   deriving (Show, Eq)
 
@@ -128,6 +176,7 @@ initialScope =
                 ("*", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("/", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("mod", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
+                ("lxor", TArrow NoLabel TInt (TArrow NoLabel TInt TInt)),
                 ("+.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("-.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
                 ("*.", TArrow NoLabel TFloat (TArrow NoLabel TFloat TFloat)),
@@ -140,33 +189,36 @@ initialScope =
                 ("~+.", TArrow NoLabel TFloat TFloat)
               ],
       constructors =
-        let a = TypeVar (-1)
-            option = TCon "option" [TVar a]
-            list = TCon "list" [TVar a]
-         in Data.Map.fromList
-              [ -- lists are an ordinary variant type
-                ("[]", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = list}),
-                ("::", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a, list], constructorResult = list}),
-                ("None", ConstructorInfo {constructorParams = [a], constructorArgs = [], constructorResult = option}),
-                ("Some", ConstructorInfo {constructorParams = [a], constructorArgs = [TVar a], constructorResult = option})
-              ],
+        Data.Map.fromList [(constructorName c, c) | c <- listConstructors ++ optionConstructors],
       fields = Data.Map.empty,
       types =
         let a = TypeVar (-1)
             -- a builtin type constructor of one parameter
-            unary name = TypeInfo [a] (TCon name [TVar a])
+            unary name = TypeInfo [a] (TCon (builtinTypeName name) [TVar a]) []
          in Data.Map.fromList
-              [ ("int", TypeInfo [] TInt),
-                ("float", TypeInfo [] TFloat),
-                ("bool", TypeInfo [] TBool),
-                ("string", TypeInfo [] TString),
-                ("unit", TypeInfo [] TUnit),
-                ("char", TypeInfo [] TChar),
-                ("list", unary "list"),
+              [ ("int", TypeInfo [] TInt []),
+                ("float", TypeInfo [] TFloat []),
+                ("bool", TypeInfo [] TBool []),
+                ("string", TypeInfo [] TString []),
+                ("unit", TypeInfo [] TUnit []),
+                ("char", TypeInfo [] TChar []),
+                ("list", (unary "list") {typeConstructors = listConstructors}),
                 ("array", unary "array"),
-                ("option", unary "option")
+                ("option", (unary "option") {typeConstructors = optionConstructors})
               ]
     }
+
+-- lists and options are ordinary variant types
+listConstructors :: [ConstructorInfo]
+listConstructors =
+  let a = TypeVar (-1)
+      list = TCon (builtinTypeName "list") [TVar a]
+   in variantConstructors [a] list [("[]", []), ("::", [TVar a, list])]
+
+optionConstructors :: [ConstructorInfo]
+optionConstructors =
+  let a = TypeVar (-1)
+   in variantConstructors [a] (TCon (builtinTypeName "option") [TVar a]) [("None", []), ("Some", [TVar a])]
 
 empty :: SymbolTable
 empty = [initialScope]

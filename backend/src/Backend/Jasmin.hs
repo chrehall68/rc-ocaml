@@ -7,7 +7,8 @@ import Data.List (isSuffixOf)
 import qualified Data.Map.Strict as Map
 import Frontend.Ast (Constant (..), Path (..))
 import Frontend.Tokens (IntLiteral (IntLiteral), IntRepresentation (Unspecified))
-import Intermediate.Type (Type (..))
+import Intermediate.MatchChecker (ExhaustiveTProgram (..))
+import Intermediate.Type (Type (..), builtinTypeName)
 import Intermediate.TypedAst
 import Numeric (showHex)
 import Text.Read (readMaybe)
@@ -20,8 +21,8 @@ import Text.Read (readMaybe)
 -- The backend supports primitive values, empty collections, variable and
 -- wildcard bindings, control flow, and selected predefined functions. Other
 -- constructs return an error until their JVM representations are defined.
-generateJasmin :: String -> TProgram Type -> Either String String
-generateJasmin className (TProgram definitions) = do
+generateJasmin :: String -> ExhaustiveTProgram -> Either String String
+generateJasmin className (ExhaustiveTProgram (TProgram definitions)) = do
   unless (validClassName className) $ Left ("Invalid JVM class name " ++ show className)
   ((_, code), finalState) <- runStateT (foldM emitDefinition (Map.empty, mempty) definitions) (Supply 1 0)
   let locals = nextLocal finalState
@@ -152,8 +153,7 @@ kind ty = case ty of
   TChar -> pure IntValue
   TFloat -> pure DoubleValue
   TString -> pure RefValue
-  TCon "array" [_] -> pure RefValue
-  TCon "list" [_] -> pure RefValue
+  TCon name [_] | name == builtinTypeName "array" || name == builtinTypeName "list" -> pure RefValue
   _ -> reject ("JVM representation for " ++ show ty)
 
 width :: ValueKind -> Int
@@ -183,8 +183,8 @@ requireType expected actual =
 -- Polymorphic list/array bindings can be instantiated at different element
 -- types. Their element type is erased by the current JVM representation.
 requireLocalType :: Type -> Type -> Emit ()
-requireLocalType (TCon "list" [_]) (TCon "list" [_]) = pure ()
-requireLocalType (TCon "array" [_]) (TCon "array" [_]) = pure ()
+requireLocalType (TCon name1 [_]) (TCon name2 [_])
+  | name1 == name2 && name1 `elem` [builtinTypeName "list", builtinTypeName "array"] = pure ()
 requireLocalType expected actual = requireType expected actual
 
 freshLocal :: Type -> Emit Local
@@ -328,7 +328,7 @@ emitExpr env expression = case expression of
         <> instruction 0 ("goto " ++ start)
         <> label end
   TEVariant {} -> reject "variants"
-  TEPolymorphicVariant {} -> reject "polymorphic variants"
+  -- TEPolymorphicVariant {} -> reject "polymorphic variants"
   TETuple {} -> reject "tuples"
   TEArray {} -> reject "nonempty arrays"
   TERecord {} -> reject "records"
@@ -413,7 +413,7 @@ emitConstant ty constant = case constant of
   --   TCon "list" [_] -> pure (instruction 1 "aconst_null")
   --   _ -> reject ("empty list with type " ++ show ty)
   TConstEmptyArray -> case ty of
-    TCon "array" [_] -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
+    TCon name [_] | name == builtinTypeName "array" -> pure (instruction 1 "iconst_0" <> instruction 0 "anewarray java/lang/Object")
     _ -> reject ("empty array with type " ++ show ty)
   TConstVariant _ -> reject "variant constants"
   TConstPolymorphicVariant _ -> reject "polymorphic variant constants"

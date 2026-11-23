@@ -22,6 +22,7 @@ module Intermediate.TypedAst where
 import Data.List.NonEmpty (NonEmpty)
 import Frontend.Ast (Path, TypeDefinition)
 import Frontend.Tokens (IntLiteral)
+import Intermediate.SymbolTable (ConstructorInfo, FieldInfo)
 import Intermediate.Type (ArgLabel)
 
 -- the constants that can remain after lowering
@@ -36,7 +37,7 @@ data TConstant
   | -- the empty array [||]
     TConstEmptyArray
   | -- a constructor without arguments, including [] and None
-    TConstVariant Path
+    TConstVariant ConstructorInfo
   | -- `Tagname
     TConstPolymorphicVariant String
   deriving (Show, Eq)
@@ -50,10 +51,11 @@ data TExpr t
     TEVar t Path
   | -- constructor applied to its argument; constant constructors stay in TEConstant
     -- a constructor with several arguments takes them as one tuple
-    TEVariant t Path (TExpr t)
+    TEVariant t ConstructorInfo (TExpr t)
   | -- TODO: needs row types before it can be typed
-    TEPolymorphicVariant t String (TExpr t)
-  | -- a tuple always has at least two elements
+
+    -- | TEPolymorphicVariant t String (TExpr t)
+    -- a tuple always has at least two elements
     TETuple t (TExpr t) (TExpr t) [TExpr t]
   | TEArray t (NonEmpty (TExpr t))
   | -- source record, changed fields; record literals have no source
@@ -93,8 +95,9 @@ data TPattern t
   | TPWildcard t
   | TPConstant t TConstant
   | TPAlias t (TPattern t) String
-  | TPOr t (TPattern t) (TPattern t)
-  | TPVariant t Path (TPattern t)
+  | -- TODO: needs lowering (and rules on names in different branches) before it can be typed
+    -- TPOr t (TPattern t) (TPattern t)
+    TPVariant t ConstructorInfo (TPattern t)
   | -- TODO: needs row types before it can be typed
     TPPolymorphicVariant t String (TPattern t)
   | -- #typ, matches any polymorphic variant tag in typ
@@ -102,9 +105,11 @@ data TPattern t
   | TPTuple t [TPattern t]
   | TPArray t [TPattern t]
   | -- the trailing ; _ doesn't matter once the record type is known
-    TPRecord t [(Path, TPattern t)]
-  | TPRange t Char Char
-  | TPLazy t (TPattern t)
+    -- the FieldInfo is one of the record's fields, which lets us find all of them
+    TPRecord t FieldInfo [(Path, TPattern t)]
+  | -- TODO: needs lowering before it can be typed
+    -- TPRange t Char Char
+    TPLazy t (TPattern t)
   | TPException t (TPattern t)
   deriving (Show, Eq, Functor, Foldable, Traversable)
 
@@ -124,7 +129,6 @@ exprAnnotation e = case e of
   TEConstant t _ -> t
   TEVar t _ -> t
   TEVariant t _ _ -> t
-  TEPolymorphicVariant t _ _ -> t
   TETuple t _ _ _ -> t
   TEArray t _ -> t
   TERecord t _ _ -> t
@@ -146,13 +150,11 @@ patternAnnotation p = case p of
   TPWildcard t -> t
   TPConstant t _ -> t
   TPAlias t _ _ -> t
-  TPOr t _ _ -> t
   TPVariant t _ _ -> t
   TPPolymorphicVariant t _ _ -> t
   TPType t _ -> t
   TPTuple t _ -> t
   TPArray t _ -> t
-  TPRecord t _ -> t
-  TPRange t _ _ -> t
+  TPRecord t _ _ -> t
   TPLazy t _ -> t
   TPException t _ -> t

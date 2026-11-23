@@ -1,9 +1,13 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module TypeAnnotatorSpec (spec) where
 
 import Data.List (isInfixOf)
 import Frontend.Ast (Path (..))
 import Frontend.Lexer (alexScanTokens)
 import Frontend.Parser (parse)
+import Intermediate.SymbolTable (ConstructorInfo (..), Sibling (..), TypeInfo (..))
+import qualified Intermediate.SymbolTable as SymTab
 import Intermediate.Type
 import Intermediate.TypeAnnotator (lowerAndInfer)
 import Intermediate.TypedAst
@@ -19,10 +23,22 @@ bindingTypes src = do
   TProgram defs <- infer src
   return [(name, t) | TDefinitionLet _ bs <- defs, TLetBinding (TPVariable t name) _ <- bs]
 
-typeOf :: String -> String -> Either String Type
-typeOf name src = do
+-- the (resolved) type of a binding, exactly as inferred (user types keep their stamps)
+stampedTypeOf :: String -> String -> Either String Type
+stampedTypeOf name src = do
   tps <- bindingTypes src
   maybe (Left $ "no binding named " ++ name) Right (lookup name tps)
+
+-- like stampedTypeOf, but user-defined type names are compared by what was written
+typeOf :: String -> String -> Either String Type
+typeOf name src = eraseStamps <$> stampedTypeOf name src
+
+eraseStamps :: Type -> Type
+eraseStamps t = case t of
+  TArrow l a b -> TArrow l (eraseStamps a) (eraseStamps b)
+  TTuple ts -> TTuple (map eraseStamps ts)
+  TCon (TypeName base _) ts -> TCon (builtinTypeName base) (map eraseStamps ts)
+  _ -> t
 
 -- fails with an error message containing the given text
 failsWith :: String -> Either String a -> Bool
@@ -287,12 +303,12 @@ spec = do
       TProgram defs <- either fail return (infer "let r = []")
       case defs of
         [TDefinitionLet _ [TLetBinding _ (TEConstant _ c)]] ->
-          c `shouldBe` TConstVariant (Path Nothing "[]")
+          fmap SymTab.constructorName (case c of TConstVariant r -> Just r; _ -> Nothing) `shouldBe` Just "[]"
         _ -> expectationFailure "unexpected shape"
     it "lowers :: to a variant applied to a tuple" $ do
       TProgram defs <- either fail return (infer "let r = 1 :: []")
       case defs of
-        [TDefinitionLet _ [TLetBinding _ (TEVariant _ path (TETuple {}))]] -> path `shouldBe` Path Nothing "::"
+        [TDefinitionLet _ [TLetBinding _ (TEVariant _ ref (TETuple {}))]] -> SymTab.constructorName ref `shouldBe` "::"
         _ -> expectationFailure "unexpected shape"
     it "types list literals" $
       typeOf "r" "let r = [1; 2; 3]" `shouldBe` Right (TCon "list" [TInt])
@@ -475,3 +491,42 @@ spec = do
       it "rejects fields of different records" $
         infer (point ++ "type other = {name : string}\nlet r = match {x = 1; y = 2} with | {x; name} -> x")
           `shouldSatisfy` failsWith "same record"
+
+  describe "type and constructor identity" $ do
+    it "gives builtin types stamp 0" $
+      typeOf "r" "let r = Some 1" `shouldBe` Right (TCon (TypeName "option" 0) [TInt])
+    it "gives user types a stamp, shown like ocaml's t/1" $
+      fmap show (stampedTypeOf "r" "type t = A\nlet r = A") `shouldBe` Right "TCon t/1 []"
+    it "distinguishes two types with the same name" $
+      stampedTypeOf "r" "type t = A\nlet x = A\ntype t = B\nlet r = B"
+        `shouldBe` Right (TCon (TypeName "t" 2) [])
+    it "keeps the earlier type distinct from the shadowing one" $
+      stampedTypeOf "x" "type t = A\nlet x = A\ntype t = B\nlet r = B"
+        `shouldBe` Right (TCon (TypeName "t" 1) [])
+    it "does not unify two same-named types" $
+      infer "type t = A\nlet x = A\ntype t = B\nlet r = if true then x else B"
+        `shouldSatisfy` isLeft'
+    it "tags constructors by declaration order and links their siblings" $ do
+      let Right some = SymTab.resolveConstructor SymTab.empty (Path Nothing "Some")
+      constructorName some `shouldBe` "Some"
+      constructorTag some `shouldBe` 1
+      constructorSiblings some `shouldBe` [Sibling "None" False, Sibling "Some" True]
+    it "links builtin types to their constructors" $ do
+      let Right info = SymTab.resolveType SymTab.empty (Path Nothing "list")
+      map constructorName (typeConstructors info) `shouldBe` ["[]", "::"]
+      map constructorTag (typeConstructors info) `shouldBe` [0, 1]
+    it "resolves constructor refs in expressions and patterns" $ do
+      let Right (TProgram defs) = infer "type t = A | B of int | C\nlet r = match B 1 with | A -> 0 | B x -> x | C -> 2"
+          refs = [r | TDefinitionLet _ [TLetBinding _ e] <- defs, r <- exprRefs e]
+          exprRefs e = case e of
+            TEMatch _ scrut cases -> exprRefs scrut ++ concat [patRefs p | TCase p _ _ <- cases]
+            TEVariant _ ref _ -> [ref]
+            _ -> []
+          patRefs p = case p of
+            TPConstant _ (TConstVariant ref) -> [ref]
+            TPVariant _ ref _ -> [ref]
+            _ -> []
+      map SymTab.constructorName refs `shouldBe` ["B", "A", "B", "C"]
+      map SymTab.constructorTag refs `shouldBe` [1, 0, 1, 2]
+      -- every one of them knows about all three constructors
+      map (map siblingName . SymTab.constructorSiblings) refs `shouldBe` replicate 4 ["A", "B", "C"]

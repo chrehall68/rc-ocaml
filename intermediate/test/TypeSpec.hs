@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module TypeSpec (spec) where
 
 import Control.Monad.Except (runExceptT)
